@@ -112,6 +112,12 @@ type Digest struct {
 	Items []Item `json:"items"`
 }
 
+type digestRepairStats struct {
+	MissingItems   int
+	IncompleteText int
+	MissingIntro   bool
+}
+
 type Client struct {
 	httpClient *http.Client
 	baseURL    string
@@ -249,6 +255,9 @@ func (c *Client) Summarize(ctx context.Context, inputs []Input) (Digest, error) 
 		c.logf("component=llm event=digest_decode_failed content_bytes=%d error=%q", contentBytes, c.safeError(err))
 		return Digest{}, fmt.Errorf("decode digest JSON: %w", err)
 	}
+	if repair := repairDigest(inputs, &digest); repair.MissingItems > 0 || repair.IncompleteText > 0 || repair.MissingIntro {
+		c.logf("component=llm event=digest_repaired missing_items=%d incomplete_text=%d missing_intro=%t", repair.MissingItems, repair.IncompleteText, repair.MissingIntro)
+	}
 	if err := validateDigest(inputs, digest); err != nil {
 		c.logf("component=llm event=digest_validation_failed items=%d error=%q", len(digest.Items), c.safeError(err))
 		return Digest{}, err
@@ -282,6 +291,62 @@ func normalizeDigestContent(content string) string {
 func emptyJSONArray(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("[]"))
+}
+
+func repairDigest(inputs []Input, digest *Digest) digestRepairStats {
+	if digest == nil {
+		return digestRepairStats{}
+	}
+	stats := digestRepairStats{}
+	if strings.TrimSpace(digest.Intro) == "" {
+		digest.Intro = "Resumo das principais notícias do Hacker News."
+		stats.MissingIntro = true
+	}
+
+	expected := make(map[int]Input, len(inputs))
+	for _, input := range inputs {
+		expected[input.ID] = input
+	}
+	seen := make(map[int]struct{}, len(digest.Items))
+	for index := range digest.Items {
+		item := &digest.Items[index]
+		input, known := expected[item.StoryID]
+		if !known {
+			continue
+		}
+		if strings.TrimSpace(item.Summary) == "" {
+			item.Summary = fallbackSummary(input)
+			stats.IncompleteText++
+		}
+		if strings.TrimSpace(item.WhyItMatters) == "" {
+			item.WhyItMatters = fallbackWhyItMatters()
+			stats.IncompleteText++
+		}
+		seen[item.StoryID] = struct{}{}
+	}
+	for _, input := range inputs {
+		if _, exists := seen[input.ID]; exists {
+			continue
+		}
+		digest.Items = append(digest.Items, Item{
+			StoryID:      input.ID,
+			Summary:      fallbackSummary(input),
+			WhyItMatters: fallbackWhyItMatters(),
+		})
+		stats.MissingItems++
+	}
+	return stats
+}
+
+func fallbackSummary(input Input) string {
+	if title := strings.TrimSpace(input.Title); title != "" {
+		return fmt.Sprintf("A LLM não retornou um resumo completo para esta notícia: %s.", title)
+	}
+	return "A LLM não retornou um resumo completo para esta notícia."
+}
+
+func fallbackWhyItMatters() string {
+	return "A notícia foi coletada, mas a LLM não retornou a justificativa de relevância."
 }
 
 func (c *Client) logDigestShape(content string) {

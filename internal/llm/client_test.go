@@ -52,7 +52,7 @@ func TestClientSummarizesStoriesUsingZenifraCompatibleEndpoint(t *testing.T) {
 	}
 }
 
-func TestClientRejectsResponseMissingStory(t *testing.T) {
+func TestClientRepairsResponseMissingStory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(completionResponse{
@@ -62,9 +62,12 @@ func TestClientRejectsResponseMissingStory(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.Client(), server.URL, "test-key", "test-model")
-	_, err := client.Summarize(context.Background(), []Input{{ID: 1, Title: "Title"}})
-	if err == nil || !strings.Contains(err.Error(), "story_id") {
-		t.Fatalf("Summarize() error = %v, want missing story_id validation", err)
+	digest, err := client.Summarize(context.Background(), []Input{{ID: 1, Title: "Title"}})
+	if err != nil {
+		t.Fatalf("Summarize() error = %v, want missing story repaired", err)
+	}
+	if len(digest.Items) != 1 || digest.Items[0].StoryID != 1 {
+		t.Fatalf("digest = %+v, want one repaired item", digest)
 	}
 }
 
@@ -182,5 +185,21 @@ func TestClientAcceptsStoryIDAlias(t *testing.T) {
 	}
 	if len(digest.Items) != 1 || digest.Items[0].StoryID != 1 {
 		t.Fatalf("digest = %+v, want one item with story_id 1", digest)
+	}
+}
+
+func TestRepairDigestFillsMissingAndIncompleteItems(t *testing.T) {
+	inputs := []Input{{ID: 1, Title: "Primeira notícia"}, {ID: 2, Title: "Segunda notícia"}}
+	digest := Digest{Items: []Item{{StoryID: 1}}}
+
+	stats := repairDigest(inputs, &digest)
+	if stats.MissingItems != 1 || stats.IncompleteText != 2 || !stats.MissingIntro {
+		t.Fatalf("repair stats = %+v, want missing item, two text fields and intro", stats)
+	}
+	if err := validateDigest(inputs, digest); err != nil {
+		t.Fatalf("validateDigest() error = %v after repair", err)
+	}
+	if !strings.Contains(digest.Items[0].Summary, "Primeira notícia") || digest.Items[1].StoryID != 2 {
+		t.Fatalf("digest after repair = %+v, want title fallback and item 2", digest)
 	}
 }
