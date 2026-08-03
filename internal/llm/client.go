@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -207,6 +208,7 @@ func (c *Client) Summarize(ctx context.Context, inputs []Input) (Digest, error) 
 	}
 	var digest Digest
 	content := stripCodeFence(completion.Choices[0].Message.Content)
+	c.logDigestShape(content)
 	if err := json.Unmarshal([]byte(content), &digest); err != nil {
 		c.logf("component=llm event=digest_decode_failed content_bytes=%d error=%q", contentBytes, c.safeError(err))
 		return Digest{}, fmt.Errorf("decode digest JSON: %w", err)
@@ -217,6 +219,38 @@ func (c *Client) Summarize(ctx context.Context, inputs []Input) (Digest, error) 
 	}
 	c.logf("component=llm event=digest_success items=%d duration_ms=%d", len(digest.Items), time.Since(requestStarted).Milliseconds())
 	return digest, nil
+}
+
+func (c *Client) logDigestShape(content string) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(content), &fields); err != nil {
+		return
+	}
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, safeShapeKey(key))
+	}
+	sort.Strings(keys)
+	itemsCount := -1
+	if rawItems, ok := fields["items"]; ok {
+		var items []json.RawMessage
+		if err := json.Unmarshal(rawItems, &items); err == nil {
+			itemsCount = len(items)
+		}
+	}
+	c.logf("component=llm event=digest_shape fields=%d keys=%s has_intro=%t has_items=%t items_count=%d has_stories=%t has_summaries=%t", len(fields), strings.Join(keys, ","), fields["intro"] != nil, fields["items"] != nil, itemsCount, fields["stories"] != nil, fields["summaries"] != nil)
+}
+
+func safeShapeKey(value string) string {
+	if value == "" {
+		return "empty"
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '_' && char != '-' {
+			return "other"
+		}
+	}
+	return value
 }
 
 func endpointLabel(raw string) string {
