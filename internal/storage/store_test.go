@@ -44,6 +44,32 @@ INSERT INTO learning_lessons(date_key, slot, topic, request_json, title, kind, o
 	}
 }
 
+func TestStoreClaimsNewContentSlots(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "content.sqlite3"), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, 8, 9, 20, 0, 0, 0, time.UTC)
+	first, err := store.BeginSystemDesign(ctx, "2026-08-09", now)
+	if err != nil || first.ID == 0 {
+		t.Fatalf("system claim=%+v err=%v", first, err)
+	}
+	second, err := store.BeginSystemDesign(ctx, "2026-08-09", now)
+	if err != nil || second.ID != first.ID || second.AlreadySent {
+		t.Fatalf("system duplicate=%+v err=%v", second, err)
+	}
+	blog, err := store.BeginEngineeringBlogRun(ctx, "2026-08-09", now)
+	if err != nil || blog.ID == 0 {
+		t.Fatalf("blog claim=%+v err=%v", blog, err)
+	}
+	blogAgain, err := store.BeginEngineeringBlogRun(ctx, "2026-08-09", now)
+	if err != nil || blogAgain.ID != blog.ID {
+		t.Fatalf("blog duplicate=%+v err=%v", blogAgain, err)
+	}
+}
+
 func TestStorePersistsLessonAndDeduplicatesScheduledSlotAfterReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "lessons.sqlite3")

@@ -45,7 +45,7 @@ func run(args []string) error {
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
 		command = args[0]
 	}
-	log.Printf("component=app event=config_loaded command=%s port=%s schedule=%s learning_morning=%s learning_evening=%s learning_topics=%d timezone=%s top_stories=%d sqlite_path=%s retention_days=%d ai_endpoint=%s ai_model=%s smtp_host=%s smtp_port=%d smtp_security=%s smtp_from_configured=%t email_to_configured=%t", command, cfg.Port, cfg.ScheduleTime, cfg.LearningMorningTime, cfg.LearningEveningTime, len(cfg.LearningTopics), cfg.Timezone, cfg.TopStories, cfg.SQLitePath, cfg.LearningRetentionDays, endpointLabel(cfg.AIBaseURL), cfg.AIModel, smtpHostLabel(cfg.SMTPHost), cfg.SMTPPort, cfg.SMTPSecurity, strings.TrimSpace(cfg.SMTPFrom) != "", strings.TrimSpace(cfg.EmailTo) != "")
+	log.Printf("component=app event=config_loaded command=%s port=%s schedule=%s learning_morning=%s learning_evening=%s system_design_time=%s engineering_blogs_time=%s learning_topics=%d blog_sources=%d timezone=%s top_stories=%d sqlite_path=%s retention_days=%d ai_endpoint=%s ai_model=%s smtp_host=%s smtp_port=%d smtp_security=%s smtp_from_configured=%t email_to_configured=%t", command, cfg.Port, cfg.ScheduleTime, cfg.LearningMorningTime, cfg.LearningEveningTime, cfg.SystemDesignTime, cfg.EngineeringBlogsTime, len(cfg.LearningTopics), len(cfg.EngineeringBlogSources), cfg.Timezone, cfg.TopStories, cfg.SQLitePath, cfg.LearningRetentionDays, endpointLabel(cfg.AIBaseURL), cfg.AIModel, smtpHostLabel(cfg.SMTPHost), cfg.SMTPPort, cfg.SMTPSecurity, strings.TrimSpace(cfg.SMTPFrom) != "", strings.TrimSpace(cfg.EmailTo) != "")
 	httpClient, aiHTTPClient := newHTTPClients()
 	newsAggregator := news.NewAggregator(
 		news.NewClient(httpClient, hackerNewsAPI),
@@ -75,7 +75,26 @@ func run(args []string) error {
 			cfg.LearningTopics,
 		)
 		learningRunner.SetLocation(cfg.Location)
-		return serve(cfg, runner, learningRunner)
+		blogSources := make([]news.EngineeringBlogSource, 0, len(cfg.EngineeringBlogSources))
+		for _, raw := range cfg.EngineeringBlogSources {
+			parts := strings.SplitN(raw, "|", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			name, urlValue := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+			key := strings.ToLower(strings.ReplaceAll(name, " ", "_"))
+			fallback := ""
+			if strings.Contains(strings.ToLower(name), "uber") {
+				fallback = urlValue
+			}
+			blogSources = append(blogSources, news.EngineeringBlogSource{Key: key, Name: name, URL: urlValue, FallbackURL: fallback, HTTPClient: httpClient})
+		}
+		fetcher := fetch.NewFetcher(httpClient, nil)
+		systemDesignRunner := job.NewSystemDesignRunner(llm.NewClient(aiHTTPClient, cfg.AIBaseURL, cfg.AIAPIKey, cfg.AIModel), email.NewSMTPMailer(cfg), store)
+		systemDesignRunner.SetLocation(cfg.Location)
+		blogsRunner := job.NewEngineeringBlogsRunner(llm.NewClient(aiHTTPClient, cfg.AIBaseURL, cfg.AIAPIKey, cfg.AIModel), email.NewSMTPMailer(cfg), store, fetcher, blogSources)
+		blogsRunner.SetLocation(cfg.Location)
+		return serve(cfg, runner, learningRunner, systemDesignRunner, blogsRunner)
 	default:
 		return fmt.Errorf("unknown command %q; use serve or run-once", command)
 	}
@@ -85,7 +104,7 @@ func newHTTPClients() (*http.Client, *http.Client) {
 	return &http.Client{Timeout: generalHTTPTimeout}, &http.Client{Timeout: aiHTTPTimeout}
 }
 
-func serve(cfg config.Config, runner *job.Runner, learningRunner *job.LearningRunner) error {
+func serve(cfg config.Config, runner *job.Runner, learningRunner *job.LearningRunner, systemDesignRunner *job.SystemDesignRunner, blogsRunner *job.EngineeringBlogsRunner) error {
 	hour, minute, err := parseSchedule(cfg.ScheduleTime)
 	if err != nil {
 		return err
@@ -95,6 +114,14 @@ func serve(cfg config.Config, runner *job.Runner, learningRunner *job.LearningRu
 		return err
 	}
 	eveningHour, eveningMinute, err := parseSchedule(cfg.LearningEveningTime)
+	if err != nil {
+		return err
+	}
+	systemHour, systemMinute, err := parseSchedule(cfg.SystemDesignTime)
+	if err != nil {
+		return err
+	}
+	blogHour, blogMinute, err := parseSchedule(cfg.EngineeringBlogsTime)
 	if err != nil {
 		return err
 	}
@@ -114,6 +141,8 @@ func serve(cfg config.Config, runner *job.Runner, learningRunner *job.LearningRu
 			serverErrors <- err
 		}
 	}()
+	go scheduler.New(systemDesignRunner, cfg.Location, systemHour, systemMinute).Run(ctx)
+	go scheduler.New(weeklyRunner{runner: blogsRunner}, cfg.Location, blogHour, blogMinute).Run(ctx)
 	startupDone := startStartupDigest(ctx, runner)
 	learningStartupDone := startStartupLearning(ctx, learningRunner)
 	go func() {
@@ -135,6 +164,10 @@ func serve(cfg config.Config, runner *job.Runner, learningRunner *job.LearningRu
 		return server.Shutdown(shutdownCtx)
 	}
 }
+
+type weeklyRunner struct{ runner *job.EngineeringBlogsRunner }
+
+func (r weeklyRunner) Run(ctx context.Context) error { return r.runner.Run(ctx) }
 
 type startupRunner interface {
 	RunOnce(context.Context) error

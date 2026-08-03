@@ -23,6 +23,9 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 	if cfg.LearningMorningTime != "07:00" || cfg.LearningEveningTime != "18:00" {
 		t.Fatalf("learning times = %q/%q, want 07:00/18:00", cfg.LearningMorningTime, cfg.LearningEveningTime)
 	}
+	if cfg.SystemDesignTime != "06:30" || cfg.EngineeringBlogsTime != "20:00" || len(cfg.EngineeringBlogSources) != 5 {
+		t.Fatalf("new schedules/sources = %q/%q/%#v", cfg.SystemDesignTime, cfg.EngineeringBlogsTime, cfg.EngineeringBlogSources)
+	}
 	if len(cfg.LearningTopics) != 9 || cfg.LearningTopics[0] != "matemática" || cfg.LearningTopics[1] != "história da matemática" {
 		t.Fatalf("LearningTopics = %#v, want default topic list", cfg.LearningTopics)
 	}

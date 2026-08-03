@@ -10,16 +10,19 @@ import (
 )
 
 type Config struct {
-	Port                  string
-	ScheduleTime          string
-	LearningMorningTime   string
-	LearningEveningTime   string
-	Timezone              string
-	Location              *time.Location
-	TopStories            int
-	LearningTopics        []string
-	SQLitePath            string
-	LearningRetentionDays int
+	Port                   string
+	ScheduleTime           string
+	LearningMorningTime    string
+	LearningEveningTime    string
+	SystemDesignTime       string
+	EngineeringBlogsTime   string
+	EngineeringBlogSources []string
+	Timezone               string
+	Location               *time.Location
+	TopStories             int
+	LearningTopics         []string
+	SQLitePath             string
+	LearningRetentionDays  int
 
 	AIBaseURL string
 	AIAPIKey  string
@@ -48,22 +51,25 @@ var defaultLearningTopics = []string{
 
 func Load() (Config, error) {
 	cfg := Config{
-		Port:                valueOr("PORT", "8080"),
-		ScheduleTime:        valueOr("SCHEDULE_TIME", "08:00"),
-		LearningMorningTime: valueOr("LEARNING_MORNING_TIME", "07:00"),
-		LearningEveningTime: valueOr("LEARNING_EVENING_TIME", "18:00"),
-		Timezone:            valueOr("TIMEZONE", "America/Sao_Paulo"),
-		AIBaseURL:           valueOr("ZENIFRA_AI_BASE_URL", "https://ai.zenifra.com/v1"),
-		AIAPIKey:            os.Getenv("ZENIFRA_AI_API_KEY"),
-		AIModel:             os.Getenv("ZENIFRA_AI_MODEL"),
-		SMTPHost:            os.Getenv("SMTP_HOST"),
-		SMTPSecurity:        valueOr("SMTP_SECURITY", "starttls"),
-		SMTPUsername:        strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
-		SMTPPassword:        compactSecret(os.Getenv("SMTP_PASSWORD")),
-		SMTPFrom:            strings.TrimSpace(os.Getenv("SMTP_FROM")),
-		EmailTo:             strings.TrimSpace(os.Getenv("EMAIL_TO")),
-		LearningTopics:      parseTopics(valueOr("LEARNING_TOPICS", strings.Join(defaultLearningTopics, ","))),
-		SQLitePath:          valueOr("SQLITE_PATH", "/data/daily-digest-news.sqlite3"),
+		Port:                   valueOr("PORT", "8080"),
+		ScheduleTime:           valueOr("SCHEDULE_TIME", "08:00"),
+		LearningMorningTime:    valueOr("LEARNING_MORNING_TIME", "07:00"),
+		LearningEveningTime:    valueOr("LEARNING_EVENING_TIME", "18:00"),
+		SystemDesignTime:       valueOr("SYSTEM_DESIGN_TIME", "06:30"),
+		EngineeringBlogsTime:   valueOr("ENGINEERING_BLOG_WEEKLY_TIME", "20:00"),
+		EngineeringBlogSources: parseBlogSources(valueOr("ENGINEERING_BLOG_SOURCES", defaultBlogSources)),
+		Timezone:               valueOr("TIMEZONE", "America/Sao_Paulo"),
+		AIBaseURL:              valueOr("ZENIFRA_AI_BASE_URL", "https://ai.zenifra.com/v1"),
+		AIAPIKey:               os.Getenv("ZENIFRA_AI_API_KEY"),
+		AIModel:                os.Getenv("ZENIFRA_AI_MODEL"),
+		SMTPHost:               os.Getenv("SMTP_HOST"),
+		SMTPSecurity:           valueOr("SMTP_SECURITY", "starttls"),
+		SMTPUsername:           strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
+		SMTPPassword:           compactSecret(os.Getenv("SMTP_PASSWORD")),
+		SMTPFrom:               strings.TrimSpace(os.Getenv("SMTP_FROM")),
+		EmailTo:                strings.TrimSpace(os.Getenv("EMAIL_TO")),
+		LearningTopics:         parseTopics(valueOr("LEARNING_TOPICS", strings.Join(defaultLearningTopics, ","))),
+		SQLitePath:             valueOr("SQLITE_PATH", "/data/daily-digest-news.sqlite3"),
 	}
 
 	for _, name := range []string{
@@ -83,6 +89,12 @@ func Load() (Config, error) {
 	}
 	if _, err := time.Parse("15:04", cfg.LearningEveningTime); err != nil {
 		return Config{}, fmt.Errorf("invalid LEARNING_EVENING_TIME: expected HH:MM")
+	}
+	if _, err := time.Parse("15:04", cfg.SystemDesignTime); err != nil {
+		return Config{}, fmt.Errorf("invalid SYSTEM_DESIGN_TIME: expected HH:MM")
+	}
+	if _, err := time.Parse("15:04", cfg.EngineeringBlogsTime); err != nil {
+		return Config{}, fmt.Errorf("invalid ENGINEERING_BLOG_WEEKLY_TIME: expected HH:MM")
 	}
 	if len(cfg.LearningTopics) == 0 {
 		return Config{}, fmt.Errorf("invalid LEARNING_TOPICS: at least one topic is required")
@@ -130,6 +142,19 @@ func Load() (Config, error) {
 	cfg.TopStories = topStories
 
 	return cfg, nil
+}
+
+const defaultBlogSources = "Uber Engineering|https://eng.uber.com/;Netflix Technology Blog|https://netflixtechblog.com/feed;Discord|https://discord.com/blog/rss.xml;Cloudflare|https://blog.cloudflare.com/rss/;Slack Engineering|https://slack.engineering/feed/"
+
+func parseBlogSources(value string) []string {
+	var out []string
+	for _, raw := range strings.Split(value, ";") {
+		raw = strings.TrimSpace(raw)
+		if raw != "" && strings.Contains(raw, "|") {
+			out = append(out, raw)
+		}
+	}
+	return out
 }
 
 func valueOr(name, fallback string) string {

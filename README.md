@@ -16,6 +16,8 @@ Ao iniciar ou reiniciar, o processo executa um digest de notícias e uma lição
 
 Além disso, uma lição autocontida de 10–15 minutos é enviada às `07:00` e `18:00`. O formato alterna de forma adaptativa entre texto explicativo e pergunta com resposta comentada. `LEARNING_TOPICS` define domínios amplos; a LLM escolhe um assunto concreto dentro deles. Os domínios padrão incluem matemática, história da matemática, computação, Go, estruturas de dados e algoritmos, PostgreSQL, bancos de dados, sistemas operacionais e física. O conteúdo prioriza história, biografias, mecanismos internos e explicações conceituais, evitando temas administrativos, gerenciais e operacionais.
 
+Uma lição independente de System Design é enviada diariamente às `06:30`, cobrindo fundamentos como replicação, particionamento, consistência, filas, cache, storage e falhas. Aos domingos às `20:00`, outro email reúne até três artigos inéditos de blogs de engenharia e pesquisa da Uber, Netflix, Discord, Cloudflare e Slack. A lista pode ser substituída por `ENGINEERING_BLOG_SOURCES`; artigos são filtrados por relevância técnica, resumidos em profundidade e deduplicados no SQLite.
+
 As chamadas da Zenifra AI têm timeout de resposta de 5 minutos por tentativa; a coleta HTTP geral mantém timeout menor e separado.
 
 ## Observabilidade
@@ -56,7 +58,10 @@ O modo `run-once` envia um e-mail real. Para testar apenas a coleta e a LLM, use
 | `SCHEDULE_TIME` | não | Default `08:00` |
 | `LEARNING_MORNING_TIME` | não | Default `07:00` |
 | `LEARNING_EVENING_TIME` | não | Default `18:00` |
+| `SYSTEM_DESIGN_TIME` | não | Default `06:30` |
+| `ENGINEERING_BLOG_WEEKLY_TIME` | não | Domingo; default `20:00` |
 | `LEARNING_TOPICS` | não | Domínios separados por vírgulas; a LLM escolhe assuntos concretos dentro deles |
+| `ENGINEERING_BLOG_SOURCES` | não | Fontes `Nome|URL` separadas por `;`; substitui os defaults |
 | `TIMEZONE` | não | Default `America/Sao_Paulo` |
 | `TOP_STORIES` | não | Limite global do digest; default `10`, máximo `20` |
 | `SQLITE_PATH` | não | Arquivo SQLite; default `/data/daily-digest-news.sqlite3` |
