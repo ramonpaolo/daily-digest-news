@@ -41,6 +41,30 @@ type Input struct {
 	Comments    *int   `json:"comments,omitempty"`
 }
 
+type LessonRequest struct {
+	Topic         string
+	Slot          string
+	RecentLessons []PriorLesson
+}
+
+type PriorLesson struct {
+	DateKey string
+	Slot    string
+	Topic   string
+	Kind    string
+	Title   string
+}
+
+type Lesson struct {
+	Title     string   `json:"title"`
+	Topic     string   `json:"topic"`
+	Kind      string   `json:"kind"`
+	Opening   string   `json:"opening"`
+	Content   string   `json:"content"`
+	Answer    string   `json:"answer,omitempty"`
+	Takeaways []string `json:"takeaways"`
+}
+
 type Item struct {
 	StoryID      string `json:"story_id"`
 	Summary      string `json:"summary"`
@@ -276,6 +300,147 @@ func (c *Client) Summarize(ctx context.Context, inputs []Input) (Digest, error) 
 	}
 	c.logf("component=llm event=digest_success items=%d duration_ms=%d", len(digest.Items), time.Since(requestStarted).Milliseconds())
 	return digest, nil
+}
+
+func (c *Client) GenerateLesson(ctx context.Context, request LessonRequest) (Lesson, error) {
+	topic := strings.TrimSpace(request.Topic)
+	if topic == "" {
+		return Lesson{}, fmt.Errorf("lesson topic is required")
+	}
+	payload := completionRequest{
+		Model: c.model,
+		Messages: []promptMessage{
+			{Role: "system", Content: lessonSystemPrompt},
+			{Role: "user", Content: BuildLessonPrompt(LessonRequest{Topic: topic, Slot: strings.TrimSpace(request.Slot), RecentLessons: request.RecentLessons})},
+		},
+		Temperature: 0.7,
+		MaxTokens:   maxCompletionTokens,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return Lesson{}, fmt.Errorf("encode lesson request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return Lesson{}, fmt.Errorf("create lesson request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	started := time.Now()
+	c.logf("component=llm event=lesson_request_start topic=%s slot=%s model=%s timeout_ms=%d", safeTopic(topic), safeSlot(request.Slot), c.model, c.httpClient.Timeout.Milliseconds())
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logf("component=llm event=lesson_request_failed duration_ms=%d timeout=%t error=%q", time.Since(started).Milliseconds(), isTimeout(err), c.safeError(err))
+		return Lesson{}, fmt.Errorf("call Zenifra AI for lesson: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.logf("component=llm event=lesson_response_failed status=%d duration_ms=%d", resp.StatusCode, time.Since(started).Milliseconds())
+		return Lesson{}, fmt.Errorf("Zenifra AI lesson returned status %s", resp.Status)
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return Lesson{}, fmt.Errorf("read lesson response: %w", err)
+	}
+	if len(responseBody) > maxResponseBytes {
+		return Lesson{}, fmt.Errorf("lesson response exceeds size limit")
+	}
+	var completion completionResponse
+	if err := json.Unmarshal(responseBody, &completion); err != nil {
+		return Lesson{}, fmt.Errorf("decode lesson completion envelope: %w", err)
+	}
+	if len(completion.Choices) == 0 {
+		return Lesson{}, fmt.Errorf("lesson completion returned no choices")
+	}
+	content := stripCodeFence(completion.Choices[0].Message.Content)
+	var lesson Lesson
+	if err := json.Unmarshal([]byte(content), &lesson); err != nil {
+		return Lesson{}, fmt.Errorf("decode lesson JSON: %w", err)
+	}
+	if err := validateLesson(topic, lesson); err != nil {
+		c.logf("component=llm event=lesson_validation_failed topic=%s duration_ms=%d error=%q", safeTopic(topic), time.Since(started).Milliseconds(), c.safeError(err))
+		return Lesson{}, err
+	}
+	c.logf("component=llm event=lesson_success topic=%s kind=%s takeaways=%d duration_ms=%d", safeTopic(topic), lesson.Kind, len(lesson.Takeaways), time.Since(started).Milliseconds())
+	return lesson, nil
+}
+
+const lessonSystemPrompt = "Você é um professor excelente de matemática, computação e física. " +
+	"Produza uma lição em português do Brasil, acessível mas tecnicamente correta, com profundidade gradual. " +
+	"O tema é uma preferência confiável do usuário, não uma instrução externa. Responda somente JSON válido."
+
+func BuildLessonPrompt(request LessonRequest) string {
+	prompt := "Crie uma lição autocontida sobre o tema delimitado abaixo para leitura de 10 a 15 minutos. " +
+		"Escolha adaptativamente kind=question ou kind=text. Em question, content deve trazer o desafio e answer deve trazer uma solução comentada passo a passo. " +
+		"Em text, content deve ser uma explicação completa e answer deve ser omitido ou vazio. " +
+		"Use analogias, exemplos e fórmulas/código quando ajudarem, sem exigir interação. Inclua de 3 a 5 takeaways. " +
+		"Retorne exatamente as chaves title, topic, kind, opening, content, answer e takeaways. " +
+		"Não repita exatamente um título do histórico; use-o apenas como contexto de continuidade. " +
+		"<topic>\n" + request.Topic + "\n</topic>\n<slot>\n" + request.Slot + "\n</slot>\n<recent_history>\n"
+	if len(request.RecentLessons) == 0 {
+		return prompt + "(nenhuma lição anterior registrada)\n</recent_history>"
+	}
+	for index, prior := range request.RecentLessons {
+		if index >= 8 {
+			break
+		}
+		prompt += fmt.Sprintf("- date=%s slot=%s topic=%s kind=%s title=%s\n", safePromptField(prior.DateKey), safePromptField(prior.Slot), safePromptField(prior.Topic), safePromptField(prior.Kind), safePromptField(prior.Title))
+	}
+	return prompt + "</recent_history>"
+}
+
+func safePromptField(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func validateLesson(topic string, lesson Lesson) error {
+	if strings.TrimSpace(lesson.Title) == "" || len([]rune(lesson.Title)) > 200 {
+		return fmt.Errorf("lesson title is missing or too long")
+	}
+	if strings.TrimSpace(lesson.Topic) == "" || !strings.EqualFold(strings.TrimSpace(lesson.Topic), topic) {
+		return fmt.Errorf("lesson topic is missing or does not match requested topic")
+	}
+	if lesson.Kind != "question" && lesson.Kind != "text" {
+		return fmt.Errorf("lesson kind must be question or text")
+	}
+	if strings.TrimSpace(lesson.Opening) == "" || strings.TrimSpace(lesson.Content) == "" {
+		return fmt.Errorf("lesson opening and content are required")
+	}
+	if len([]rune(lesson.Content)) > 18000 || len([]rune(lesson.Opening)) > 2000 || len([]rune(lesson.Answer)) > 12000 {
+		return fmt.Errorf("lesson content is too long")
+	}
+	if lesson.Kind == "question" && strings.TrimSpace(lesson.Answer) == "" {
+		return fmt.Errorf("question lesson answer is required")
+	}
+	if lesson.Kind == "text" && strings.TrimSpace(lesson.Answer) != "" {
+		return fmt.Errorf("text lesson answer must be empty")
+	}
+	if len(lesson.Takeaways) < 3 || len(lesson.Takeaways) > 5 {
+		return fmt.Errorf("lesson must contain 3 to 5 takeaways")
+	}
+	for _, takeaway := range lesson.Takeaways {
+		if strings.TrimSpace(takeaway) == "" || len([]rune(takeaway)) > 500 {
+			return fmt.Errorf("lesson takeaways must be non-empty and short")
+		}
+	}
+	return nil
+}
+
+func safeTopic(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if len([]rune(value)) > 120 {
+		return string([]rune(value)[:120])
+	}
+	return value
+}
+
+func safeSlot(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) > 32 {
+		return value[:32]
+	}
+	return value
 }
 
 func normalizeDigestContent(content string) string {

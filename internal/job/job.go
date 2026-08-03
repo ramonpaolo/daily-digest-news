@@ -192,24 +192,35 @@ func (r *Runner) run(ctx context.Context, force bool) (runErr error) {
 	return nil
 }
 
-func retry[T any](r *Runner, ctx context.Context, phase string, operation func(context.Context) (T, error)) (T, error) {
+type retryContext interface {
+	retryLogf(string, ...any)
+	retrySleep(context.Context, time.Duration) error
+}
+
+func (r *Runner) retryLogf(format string, args ...any) { r.logf(format, args...) }
+
+func (r *Runner) retrySleep(ctx context.Context, duration time.Duration) error {
+	return r.sleep(ctx, duration)
+}
+
+func retry[T any](r retryContext, ctx context.Context, phase string, operation func(context.Context) (T, error)) (T, error) {
 	var zero T
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		attemptStarted := time.Now()
-		r.logf("component=job event=retry_attempt_start phase=%s attempt=%d", phase, attempt+1)
+		r.retryLogf("component=job event=retry_attempt_start phase=%s attempt=%d", phase, attempt+1)
 		value, err := operation(ctx)
 		if err == nil {
-			r.logf("component=job event=retry_attempt_success phase=%s attempt=%d duration_ms=%d", phase, attempt+1, time.Since(attemptStarted).Milliseconds())
+			r.retryLogf("component=job event=retry_attempt_success phase=%s attempt=%d duration_ms=%d", phase, attempt+1, time.Since(attemptStarted).Milliseconds())
 			return value, nil
 		}
 		lastErr = err
-		r.logf("component=job event=retry_attempt_failed phase=%s attempt=%d duration_ms=%d error=%q", phase, attempt+1, time.Since(attemptStarted).Milliseconds(), safeError(err))
+		r.retryLogf("component=job event=retry_attempt_failed phase=%s attempt=%d duration_ms=%d error=%q", phase, attempt+1, time.Since(attemptStarted).Milliseconds(), safeError(err))
 		if attempt < 2 {
 			backoff := time.Duration(1<<attempt) * time.Second
-			r.logf("component=job event=retry_backoff phase=%s attempt=%d backoff_ms=%d", phase, attempt+1, backoff.Milliseconds())
-			if err := r.sleep(ctx, backoff); err != nil {
-				r.logf("component=job event=retry_backoff_failed phase=%s attempt=%d error=%q", phase, attempt+1, safeError(err))
+			r.retryLogf("component=job event=retry_backoff phase=%s attempt=%d backoff_ms=%d", phase, attempt+1, backoff.Milliseconds())
+			if err := r.retrySleep(ctx, backoff); err != nil {
+				r.retryLogf("component=job event=retry_backoff_failed phase=%s attempt=%d error=%q", phase, attempt+1, safeError(err))
 				return zero, err
 			}
 		}
@@ -217,7 +228,7 @@ func retry[T any](r *Runner, ctx context.Context, phase string, operation func(c
 	return zero, lastErr
 }
 
-func retryVoid(r *Runner, ctx context.Context, phase string, operation func(context.Context) error) error {
+func retryVoid(r retryContext, ctx context.Context, phase string, operation func(context.Context) error) error {
 	_, err := retry(r, ctx, phase, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, operation(ctx)
 	})

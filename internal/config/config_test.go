@@ -20,6 +20,12 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 	if cfg.ScheduleTime != "08:00" {
 		t.Fatalf("ScheduleTime = %q, want 08:00", cfg.ScheduleTime)
 	}
+	if cfg.LearningMorningTime != "07:00" || cfg.LearningEveningTime != "18:00" {
+		t.Fatalf("learning times = %q/%q, want 07:00/18:00", cfg.LearningMorningTime, cfg.LearningEveningTime)
+	}
+	if len(cfg.LearningTopics) != 7 || cfg.LearningTopics[0] != "matemática" {
+		t.Fatalf("LearningTopics = %#v, want default topic list", cfg.LearningTopics)
+	}
 	if cfg.Timezone != "America/Sao_Paulo" {
 		t.Fatalf("Timezone = %q, want America/Sao_Paulo", cfg.Timezone)
 	}
@@ -31,6 +37,67 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 	}
 	if cfg.AIBaseURL != "https://ai.zenifra.com/v1" {
 		t.Fatalf("AIBaseURL = %q, want Zenifra default", cfg.AIBaseURL)
+	}
+	if cfg.SQLitePath != "/data/daily-digest-news.sqlite3" {
+		t.Fatalf("SQLitePath = %q, want default persistent path", cfg.SQLitePath)
+	}
+	if cfg.LearningRetentionDays != 365 {
+		t.Fatalf("LearningRetentionDays = %d, want 365", cfg.LearningRetentionDays)
+	}
+}
+
+func TestLoadAcceptsLearningOverrides(t *testing.T) {
+	setRequired(t)
+	t.Setenv("LEARNING_MORNING_TIME", "06:30")
+	t.Setenv("LEARNING_EVENING_TIME", "19:15")
+	t.Setenv("LEARNING_TOPICS", " matemática, física, matemática ")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.LearningMorningTime != "06:30" || cfg.LearningEveningTime != "19:15" {
+		t.Fatalf("learning times = %q/%q", cfg.LearningMorningTime, cfg.LearningEveningTime)
+	}
+	if strings.Join(cfg.LearningTopics, ",") != "matemática,física" {
+		t.Fatalf("LearningTopics = %#v, want trimmed unique list", cfg.LearningTopics)
+	}
+}
+
+func TestLoadRejectsInvalidLearningTime(t *testing.T) {
+	setRequired(t)
+	t.Setenv("LEARNING_EVENING_TIME", "25:00")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "LEARNING_EVENING_TIME") {
+		t.Fatalf("Load() error = %v, want invalid learning time", err)
+	}
+}
+
+func TestLoadAcceptsSQLiteOverrides(t *testing.T) {
+	setRequired(t)
+	t.Setenv("SQLITE_PATH", "/mnt/history/lessons.db")
+	t.Setenv("LEARNING_RETENTION_DAYS", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SQLitePath != "/mnt/history/lessons.db" {
+		t.Fatalf("SQLitePath = %q", cfg.SQLitePath)
+	}
+	if cfg.LearningRetentionDays != 0 {
+		t.Fatalf("LearningRetentionDays = %d, want unlimited", cfg.LearningRetentionDays)
+	}
+}
+
+func TestLoadRejectsNegativeSQLiteRetention(t *testing.T) {
+	setRequired(t)
+	t.Setenv("LEARNING_RETENTION_DAYS", "-1")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "LEARNING_RETENTION_DAYS") {
+		t.Fatalf("Load() error = %v, want invalid retention", err)
 	}
 }
 

@@ -12,6 +12,19 @@ type startupRunnerStub struct {
 	release chan struct{}
 }
 
+type learningStartupRunnerStub struct {
+	calls   int
+	called  chan struct{}
+	release chan struct{}
+}
+
+func (s *learningStartupRunnerStub) RunStartup(context.Context) error {
+	s.calls++
+	close(s.called)
+	<-s.release
+	return nil
+}
+
 func (s *startupRunnerStub) RunOnce(context.Context) error {
 	s.calls++
 	close(s.called)
@@ -42,6 +55,26 @@ func TestStartStartupDigestRunsImmediatelyAndOnce(t *testing.T) {
 	<-done
 	if runner.calls != 1 {
 		t.Fatalf("RunOnce calls = %d, want 1", runner.calls)
+	}
+}
+
+func TestStartStartupLearningRunsImmediatelyAndOnce(t *testing.T) {
+	runner := &learningStartupRunnerStub{called: make(chan struct{}), release: make(chan struct{})}
+	done := startStartupLearning(context.Background(), runner)
+	select {
+	case <-runner.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup learning did not begin immediately")
+	}
+	select {
+	case <-done:
+		t.Fatal("startup learning completed before runner was released")
+	default:
+	}
+	close(runner.release)
+	<-done
+	if runner.calls != 1 {
+		t.Fatalf("RunStartup calls = %d, want 1", runner.calls)
 	}
 }
 

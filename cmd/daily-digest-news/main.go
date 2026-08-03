@@ -20,6 +20,7 @@ import (
 	"github.com/ramonpaolo/daily-digest-news/internal/llm"
 	"github.com/ramonpaolo/daily-digest-news/internal/news"
 	"github.com/ramonpaolo/daily-digest-news/internal/scheduler"
+	"github.com/ramonpaolo/daily-digest-news/internal/storage"
 )
 
 const (
@@ -44,7 +45,7 @@ func run(args []string) error {
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
 		command = args[0]
 	}
-	log.Printf("component=app event=config_loaded command=%s port=%s schedule=%s timezone=%s top_stories=%d ai_endpoint=%s ai_model=%s smtp_host=%s smtp_port=%d smtp_security=%s smtp_from_configured=%t email_to_configured=%t", command, cfg.Port, cfg.ScheduleTime, cfg.Timezone, cfg.TopStories, endpointLabel(cfg.AIBaseURL), cfg.AIModel, smtpHostLabel(cfg.SMTPHost), cfg.SMTPPort, cfg.SMTPSecurity, strings.TrimSpace(cfg.SMTPFrom) != "", strings.TrimSpace(cfg.EmailTo) != "")
+	log.Printf("component=app event=config_loaded command=%s port=%s schedule=%s learning_morning=%s learning_evening=%s learning_topics=%d timezone=%s top_stories=%d sqlite_path=%s retention_days=%d ai_endpoint=%s ai_model=%s smtp_host=%s smtp_port=%d smtp_security=%s smtp_from_configured=%t email_to_configured=%t", command, cfg.Port, cfg.ScheduleTime, cfg.LearningMorningTime, cfg.LearningEveningTime, len(cfg.LearningTopics), cfg.Timezone, cfg.TopStories, cfg.SQLitePath, cfg.LearningRetentionDays, endpointLabel(cfg.AIBaseURL), cfg.AIModel, smtpHostLabel(cfg.SMTPHost), cfg.SMTPPort, cfg.SMTPSecurity, strings.TrimSpace(cfg.SMTPFrom) != "", strings.TrimSpace(cfg.EmailTo) != "")
 	httpClient, aiHTTPClient := newHTTPClients()
 	newsAggregator := news.NewAggregator(
 		news.NewClient(httpClient, hackerNewsAPI),
@@ -58,12 +59,23 @@ func run(args []string) error {
 	)
 	runner.SetLimit(cfg.TopStories)
 	runner.SetLocation(cfg.Location)
-
 	switch command {
 	case "run-once":
 		return runner.RunOnce(context.Background())
 	case "serve":
-		return serve(cfg, runner)
+		store, err := storage.Open(context.Background(), cfg.SQLitePath, cfg.LearningRetentionDays)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		learningRunner := job.NewLearningRunner(
+			llm.NewClient(aiHTTPClient, cfg.AIBaseURL, cfg.AIAPIKey, cfg.AIModel),
+			email.NewSMTPMailer(cfg),
+			store,
+			cfg.LearningTopics,
+		)
+		learningRunner.SetLocation(cfg.Location)
+		return serve(cfg, runner, learningRunner)
 	default:
 		return fmt.Errorf("unknown command %q; use serve or run-once", command)
 	}
@@ -73,8 +85,16 @@ func newHTTPClients() (*http.Client, *http.Client) {
 	return &http.Client{Timeout: generalHTTPTimeout}, &http.Client{Timeout: aiHTTPTimeout}
 }
 
-func serve(cfg config.Config, runner *job.Runner) error {
+func serve(cfg config.Config, runner *job.Runner, learningRunner *job.LearningRunner) error {
 	hour, minute, err := parseSchedule(cfg.ScheduleTime)
+	if err != nil {
+		return err
+	}
+	morningHour, morningMinute, err := parseSchedule(cfg.LearningMorningTime)
+	if err != nil {
+		return err
+	}
+	eveningHour, eveningMinute, err := parseSchedule(cfg.LearningEveningTime)
 	if err != nil {
 		return err
 	}
@@ -95,9 +115,15 @@ func serve(cfg config.Config, runner *job.Runner) error {
 		}
 	}()
 	startupDone := startStartupDigest(ctx, runner)
+	learningStartupDone := startStartupLearning(ctx, learningRunner)
 	go func() {
 		<-startupDone
 		_ = scheduler.New(runner, cfg.Location, hour, minute).Run(ctx)
+	}()
+	go func() {
+		<-learningStartupDone
+		go scheduler.New(learningSlotRunner{runner: learningRunner, slot: "morning"}, cfg.Location, morningHour, morningMinute).Run(ctx)
+		_ = scheduler.New(learningSlotRunner{runner: learningRunner, slot: "evening"}, cfg.Location, eveningHour, eveningMinute).Run(ctx)
 	}()
 
 	select {
@@ -114,6 +140,19 @@ type startupRunner interface {
 	RunOnce(context.Context) error
 }
 
+type learningStartupRunner interface {
+	RunStartup(context.Context) error
+}
+
+type learningSlotRunner struct {
+	runner *job.LearningRunner
+	slot   string
+}
+
+func (r learningSlotRunner) Run(ctx context.Context) error {
+	return r.runner.RunSlot(ctx, r.slot)
+}
+
 func startStartupDigest(ctx context.Context, runner startupRunner) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -125,6 +164,21 @@ func startStartupDigest(ctx context.Context, runner startupRunner) <-chan struct
 			return
 		}
 		log.Printf("component=startup event=digest_success duration_ms=%d", time.Since(started).Milliseconds())
+	}()
+	return done
+}
+
+func startStartupLearning(ctx context.Context, runner learningStartupRunner) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		started := time.Now()
+		log.Printf("component=learning_startup event=lesson_start")
+		if err := runner.RunStartup(ctx); err != nil {
+			log.Printf("component=learning_startup event=lesson_failed duration_ms=%d error=%q", time.Since(started).Milliseconds(), safeError(err))
+			return
+		}
+		log.Printf("component=learning_startup event=lesson_success duration_ms=%d", time.Since(started).Milliseconds())
 	}()
 	return done
 }

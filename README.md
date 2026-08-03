@@ -1,18 +1,20 @@
 # Daily Digest News
 
-Um pequeno job em Go que coleta notícias do Hacker News e do IEEE Spectrum, usa a IA compatível com OpenAI da Zenifra para criar um resumo agregado em português do Brasil e envia o resultado por SMTP.
+Um pequeno job em Go que coleta notícias do Hacker News e do IEEE Spectrum e também envia lições curtas de matemática, computação e física. A IA compatível com OpenAI da Zenifra gera os conteúdos em português do Brasil e o resultado é enviado por SMTP.
 
 O projeto é público para estudo. A aplicação publicada na Zenifra deve permanecer privada e não expõe um endpoint de disparo de e-mail.
 
 ## Como funciona
 
-Ao iniciar ou reiniciar, o processo executa um digest imediatamente. Depois, continua executando todos os dias às 08:00 no fuso `America/Sao_Paulo`:
+Ao iniciar ou reiniciar, o processo executa um digest de notícias e uma lição de aprendizado imediatamente. Depois, continua executando no fuso `America/Sao_Paulo`:
 
 1. consulta as fontes nativas (Hacker News e o RSS oficial do IEEE Spectrum) em paralelo;
 2. intercala as fontes até o limite global de `TOP_STORIES`, remove URLs duplicadas e tenta extrair o texto dos artigos;
 3. envia o lote delimitado como conteúdo não confiável para a Zenifra AI;
 4. valida a resposta JSON da LLM;
 5. monta um e-mail HTML e texto e envia por SMTP.
+
+Além disso, uma lição autocontida de 10–15 minutos é enviada às `07:00` e `18:00`. O formato alterna de forma adaptativa entre texto explicativo e pergunta com resposta comentada. Os temas padrão incluem matemática, computação, Go, estruturas de dados e algoritmos, internals de sistemas operacionais, internals de bancos de dados e física.
 
 As chamadas da Zenifra AI têm timeout de resposta de 5 minutos por tentativa; a coleta HTTP geral mantém timeout menor e separado.
 
@@ -22,7 +24,7 @@ Os logs são texto estruturado e começam com `component` e `event`. Cada execu�
 
 Em Kubernetes, use `kubectl logs` no pod do projeto e filtre por componente ou evento, por exemplo `component=llm`, `event=response` ou `event=stage_failed`. Uma resposta da LLM sem conteúdo agora aparece com `choices`, `content_bytes`, `reasoning_bytes`, `refusal_bytes` e `tool_calls`, permitindo distinguir resposta vazia, raciocínio sem resposta final e falha de transporte.
 
-O estado é mantido somente em memória. Um reinício dispara deliberadamente uma nova execução e pode enviar outro e-mail no mesmo dia; enquanto o mesmo processo permanece ativo, o agendamento diário evita duplicatas.
+O histórico de aprendizado é persistido em SQLite. Configure um volume persistente para `/data`; o arquivo padrão é `/data/daily-digest-news.sqlite3` e os arquivos WAL/SHM ficam no mesmo diretório. Um reinício dispara deliberadamente uma nova lição `startup`, enquanto os slots `morning` e `evening` são deduplicados por data mesmo após reinícios.
 
 ## Desenvolvimento local
 
@@ -52,10 +54,17 @@ O modo `run-once` envia um e-mail real. Para testar apenas a coleta e a LLM, use
 | `SMTP_FROM`, `EMAIL_TO` | sim | Remetente e destinatário |
 | `PORT` | não | Default `8080` |
 | `SCHEDULE_TIME` | não | Default `08:00` |
+| `LEARNING_MORNING_TIME` | não | Default `07:00` |
+| `LEARNING_EVENING_TIME` | não | Default `18:00` |
+| `LEARNING_TOPICS` | não | Lista separada por vírgulas; substitui os temas padrão |
 | `TIMEZONE` | não | Default `America/Sao_Paulo` |
 | `TOP_STORIES` | não | Limite global do digest; default `10`, máximo `20` |
+| `SQLITE_PATH` | não | Arquivo SQLite; default `/data/daily-digest-news.sqlite3` |
+| `LEARNING_RETENTION_DAYS` | não | Retenção das lições; default `365`, `0` desativa a limpeza |
 
 As fontes são embutidas no código e ficam ativas por padrão. Uma indisponibilidade isolada é registrada e não impede o envio com as demais fontes; o digest falha somente quando nenhuma fonte retorna notícias utilizáveis. Cada item do email identifica sua fonte. Para adicionar outra fonte, implemente `news.Provider`, adicione testes do adaptador e registre-o no entrypoint.
+
+O fluxo de aprendizado é independente do digest de notícias: uma falha em uma lição não bloqueia as notícias. Os temas configurados são persistidos como interesses ativos e a próxima lição prioriza o menos utilizado. As últimas oito lições enviadas orientam a LLM a evitar repetição, sem reenviar os textos completos.
 
 ## Health check
 
@@ -66,6 +75,8 @@ As fontes são embutidas no código e ficam ativas por padrão. Uma indisponibil
 O runtime GitHub nativo da Zenifra não oferece Go neste momento, então o workflow cria uma imagem OCI no GHCR. Cada imagem usa uma tag imutável baseada no SHA do commit; `latest` não é utilizado.
 
 Depois do primeiro build, torne o pacote GHCR público, crie o projeto HTTP privado na Zenifra e configure as ENVs diretamente no console. Para os deploys seguintes, configure:
+
+Na Zenifra, monte um volume persistente gravável pelo usuário `nonroot` no caminho `/data`. Use uma única réplica ativa para este SQLite. O backup deve preservar o arquivo `.sqlite3` e os arquivos WAL/SHM; faça-o com a aplicação parada ou com uma ferramenta SQLite compatível.
 
 - `ZENIFRA_DEPLOY_API_KEY` como GitHub Actions Secret;
 - `ZENIFRA_PROJECT_ID` como GitHub Actions Variable.
