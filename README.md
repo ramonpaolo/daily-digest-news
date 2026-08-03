@@ -16,6 +16,12 @@ Ao iniciar ou reiniciar, o processo executa um digest imediatamente. Depois, con
 
 As chamadas da Zenifra AI têm timeout de resposta de 5 minutos por tentativa; a coleta HTTP geral mantém timeout menor e separado.
 
+## Observabilidade
+
+Os logs são texto estruturado e começam com `component` e `event`. Cada execução registra início, duração, tentativas e resultado de coleta do Hacker News, extração de artigos, chamada da LLM, renderização e cada etapa SMTP; a resposta da LLM inclui apenas metadados como status HTTP, quantidade de escolhas, bytes de conteúdo/raciocínio e `finish_reason`. Prompts, artigos, corpos de e-mail, tokens, senhas e partes locais dos endereços nunca são registrados.
+
+Em Kubernetes, use `kubectl logs` no pod do projeto e filtre por componente ou evento, por exemplo `component=llm`, `event=response` ou `event=stage_failed`. Uma resposta da LLM sem conteúdo agora aparece com `choices`, `content_bytes`, `reasoning_bytes`, `refusal_bytes` e `tool_calls`, permitindo distinguir resposta vazia, raciocínio sem resposta final e falha de transporte.
+
 O estado é mantido somente em memória. Um reinício dispara deliberadamente uma nova execução e pode enviar outro e-mail no mesmo dia; enquanto o mesmo processo permanece ativo, o agendamento diário evita duplicatas.
 
 ## Desenvolvimento local

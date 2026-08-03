@@ -1,8 +1,10 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,5 +62,41 @@ func TestClientRejectsResponseMissingStory(t *testing.T) {
 	_, err := client.Summarize(context.Background(), []Input{{ID: 1, Title: "Title"}})
 	if err == nil || !strings.Contains(err.Error(), "story_id") {
 		t.Fatalf("Summarize() error = %v, want missing story_id validation", err)
+	}
+}
+
+func TestClientLogsResponseMetadataWhenCompletionHasNoContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"","reasoning_content":"private reasoning"}}]}`))
+	}))
+	defer server.Close()
+
+	var logs bytes.Buffer
+	client := NewClient(server.Client(), server.URL, "test-key", "test-model")
+	client.SetLogger(func(format string, args ...any) {
+		_, _ = fmt.Fprintf(&logs, format+"\n", args...)
+	})
+	_, err := client.Summarize(context.Background(), []Input{{ID: 1, Title: "Title"}})
+	if err == nil || !strings.Contains(err.Error(), "completion returned no content") {
+		t.Fatalf("Summarize() error = %v, want no-content diagnostic", err)
+	}
+
+	output := logs.String()
+	for _, want := range []string{
+		"component=llm event=request_start",
+		"component=llm event=response",
+		"choices=1",
+		"reasoning_bytes=17",
+		"finish_reason=length",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("logs missing %q:\n%s", want, output)
+		}
+	}
+	for _, secret := range []string{"test-key", "private reasoning"} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("logs contain sensitive value %q:\n%s", secret, output)
+		}
 	}
 }

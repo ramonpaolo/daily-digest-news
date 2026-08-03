@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
@@ -13,6 +14,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +25,7 @@ import (
 type SMTPMailer struct {
 	config config.Config
 	dial   func(context.Context, string, string) (net.Conn, error)
+	logf   func(string, ...any)
 }
 
 func NewSMTPMailer(cfg config.Config) *SMTPMailer {
@@ -30,32 +33,53 @@ func NewSMTPMailer(cfg config.Config) *SMTPMailer {
 	return &SMTPMailer{
 		config: cfg,
 		dial:   dialer.DialContext,
+		logf:   log.Printf,
+	}
+}
+
+func (m *SMTPMailer) SetLogger(logf func(string, ...any)) {
+	if logf != nil {
+		m.logf = logf
 	}
 }
 
 func (m *SMTPMailer) Send(ctx context.Context, message Message) error {
+	sendStarted := time.Now()
 	raw, from, recipient, err := buildMessage(message, m.config.SMTPFrom, m.config.EmailTo)
 	if err != nil {
+		m.logf("component=smtp event=message_build_failed error=%q", safeError(err))
 		return err
 	}
+	m.logf("component=smtp event=send_start host=%s port=%d security=%s from_domain=%s recipient_domain=%s bytes=%d", hostLabel(m.config.SMTPHost), m.config.SMTPPort, m.config.SMTPSecurity, addressDomain(from), addressDomain(recipient), len(raw))
 	address := net.JoinHostPort(m.config.SMTPHost, strconv.Itoa(m.config.SMTPPort))
 	var conn net.Conn
+	stageStarted := time.Now()
 	if m.config.SMTPSecurity == "tls" {
 		plainConn, dialErr := m.dial(ctx, "tcp", address)
 		if dialErr != nil {
-			return fmt.Errorf("dial SMTP: %w", dialErr)
+			wrapped := fmt.Errorf("dial SMTP: %w", dialErr)
+			m.logStageFailure("dial", stageStarted, wrapped)
+			return wrapped
 		}
+		m.logStageSuccess("dial", stageStarted)
+		stageStarted = time.Now()
 		tlsConn := tls.Client(plainConn, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: m.config.SMTPHost})
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = plainConn.Close()
-			return fmt.Errorf("establish SMTP TLS: %w", err)
+			wrapped := fmt.Errorf("establish SMTP TLS: %w", err)
+			m.logStageFailure("tls_handshake", stageStarted, wrapped)
+			return wrapped
 		}
+		m.logStageSuccess("tls_handshake", stageStarted)
 		conn = tlsConn
 	} else {
 		conn, err = m.dial(ctx, "tcp", address)
 		if err != nil {
-			return fmt.Errorf("dial SMTP: %w", err)
+			wrapped := fmt.Errorf("dial SMTP: %w", err)
+			m.logStageFailure("dial", stageStarted, wrapped)
+			return wrapped
 		}
+		m.logStageSuccess("dial", stageStarted)
 	}
 	defer conn.Close()
 	if deadline, ok := ctx.Deadline(); ok {
@@ -64,43 +88,123 @@ func (m *SMTPMailer) Send(ctx context.Context, message Message) error {
 		_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 	}
 
+	stageStarted = time.Now()
 	client, err := smtp.NewClient(conn, m.config.SMTPHost)
 	if err != nil {
-		return fmt.Errorf("start SMTP client: %w", err)
+		wrapped := fmt.Errorf("start SMTP client: %w", err)
+		m.logStageFailure("client", stageStarted, wrapped)
+		return wrapped
 	}
+	m.logStageSuccess("client", stageStarted)
 	defer client.Close()
+	stageStarted = time.Now()
 	if err := client.Hello(m.config.SMTPHost); err != nil {
-		return fmt.Errorf("SMTP hello: %w", err)
+		wrapped := fmt.Errorf("SMTP hello: %w", err)
+		m.logStageFailure("hello", stageStarted, wrapped)
+		return wrapped
 	}
+	m.logStageSuccess("hello", stageStarted)
 	if m.config.SMTPSecurity == "starttls" {
+		stageStarted = time.Now()
 		if err := client.StartTLS(&tls.Config{MinVersion: tls.VersionTLS12, ServerName: m.config.SMTPHost}); err != nil {
-			return fmt.Errorf("start SMTP TLS: %w", err)
+			wrapped := fmt.Errorf("start SMTP TLS: %w", err)
+			m.logStageFailure("starttls", stageStarted, wrapped)
+			return wrapped
 		}
+		m.logStageSuccess("starttls", stageStarted)
 	}
+	stageStarted = time.Now()
 	if err := client.Auth(smtp.PlainAuth("", m.config.SMTPUsername, m.config.SMTPPassword, m.config.SMTPHost)); err != nil {
-		return fmt.Errorf("SMTP authentication failed: %w", err)
+		wrapped := fmt.Errorf("SMTP authentication failed: %w", err)
+		m.logStageFailure("auth", stageStarted, wrapped)
+		return wrapped
 	}
+	m.logStageSuccess("auth", stageStarted)
+	stageStarted = time.Now()
 	if err := client.Mail(from); err != nil {
-		return fmt.Errorf("SMTP sender rejected: %w", err)
+		wrapped := fmt.Errorf("SMTP sender rejected: %w", err)
+		m.logStageFailure("mail_from", stageStarted, wrapped)
+		return wrapped
 	}
+	m.logStageSuccess("mail_from", stageStarted)
+	stageStarted = time.Now()
 	if err := client.Rcpt(recipient); err != nil {
-		return fmt.Errorf("SMTP recipient rejected: %w", err)
+		wrapped := fmt.Errorf("SMTP recipient rejected: %w", err)
+		m.logStageFailure("rcpt_to", stageStarted, wrapped)
+		return wrapped
 	}
+	m.logStageSuccess("rcpt_to", stageStarted)
+	stageStarted = time.Now()
 	writer, err := client.Data()
 	if err != nil {
-		return fmt.Errorf("open SMTP message data: %w", err)
+		wrapped := fmt.Errorf("open SMTP message data: %w", err)
+		m.logStageFailure("data_start", stageStarted, wrapped)
+		return wrapped
 	}
+	m.logStageSuccess("data_start", stageStarted)
+	stageStarted = time.Now()
 	if _, err := writer.Write(raw); err != nil {
 		_ = writer.Close()
-		return fmt.Errorf("write SMTP message: %w", err)
+		wrapped := fmt.Errorf("write SMTP message: %w", err)
+		m.logStageFailure("data_write", stageStarted, wrapped)
+		return wrapped
 	}
+	m.logStageSuccess("data_write", stageStarted)
+	stageStarted = time.Now()
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("finish SMTP message: %w", err)
+		wrapped := fmt.Errorf("finish SMTP message: %w", err)
+		m.logStageFailure("data_finish", stageStarted, wrapped)
+		return wrapped
 	}
+	m.logStageSuccess("data_finish", stageStarted)
+	stageStarted = time.Now()
 	if err := client.Quit(); err != nil {
-		return fmt.Errorf("finish SMTP session: %w", err)
+		wrapped := fmt.Errorf("finish SMTP session: %w", err)
+		m.logStageFailure("quit", stageStarted, wrapped)
+		return wrapped
 	}
+	m.logStageSuccess("quit", stageStarted)
+	m.logf("component=smtp event=send_success duration_ms=%d bytes=%d", time.Since(sendStarted).Milliseconds(), len(raw))
 	return nil
+}
+
+func (m *SMTPMailer) logStageSuccess(stage string, started time.Time) {
+	m.logf("component=smtp event=stage_success stage=%s duration_ms=%d", stage, time.Since(started).Milliseconds())
+}
+
+func (m *SMTPMailer) logStageFailure(stage string, started time.Time, err error) {
+	m.logf("component=smtp event=stage_failed stage=%s duration_ms=%d error=%q", stage, time.Since(started).Milliseconds(), safeError(err))
+}
+
+func addressDomain(value string) string {
+	parsed, err := mail.ParseAddress(value)
+	if err != nil {
+		return "invalid"
+	}
+	at := strings.LastIndex(parsed.Address, "@")
+	if at <= 0 || at == len(parsed.Address)-1 {
+		return "invalid"
+	}
+	return strings.ToLower(parsed.Address[at+1:])
+}
+
+func hostLabel(value string) string {
+	parsed, err := url.Parse("//" + strings.TrimSpace(value))
+	if err != nil || parsed.Hostname() == "" {
+		return "invalid"
+	}
+	return parsed.Hostname()
+}
+
+func safeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	value := strings.Join(strings.Fields(err.Error()), " ")
+	if len(value) > 240 {
+		return value[:240] + "…"
+	}
+	return value
 }
 
 func buildMessage(message Message, from, recipient string) ([]byte, string, string, error) {

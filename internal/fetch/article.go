@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,6 +25,7 @@ type HostValidator func(context.Context, string) error
 type Fetcher struct {
 	httpClient *http.Client
 	validate   HostValidator
+	logf       func(string, ...any)
 }
 
 func NewFetcher(httpClient *http.Client, validator HostValidator) *Fetcher {
@@ -50,7 +52,13 @@ func NewFetcher(httpClient *http.Client, validator HostValidator) *Fetcher {
 		}
 		return validator(req.Context(), req.URL.Hostname())
 	}
-	return &Fetcher{httpClient: &client, validate: validator}
+	return &Fetcher{httpClient: &client, validate: validator, logf: log.Printf}
+}
+
+func (f *Fetcher) SetLogger(logf func(string, ...any)) {
+	if logf != nil {
+		f.logf = logf
+	}
 }
 
 func safeDialContext(ctx context.Context, network, address string, validator HostValidator, enforcePrivate bool) (net.Conn, error) {
@@ -77,11 +85,22 @@ func safeDialContext(ctx context.Context, network, address string, validator Hos
 	return nil, fmt.Errorf("article host is private or local")
 }
 
-func (f *Fetcher) Extract(ctx context.Context, rawURL string) (string, error) {
+func (f *Fetcher) Extract(ctx context.Context, rawURL string) (text string, runErr error) {
+	started := time.Now()
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
+		f.logf("component=fetch event=extract_failed host=invalid duration_ms=%d error=%q", time.Since(started).Milliseconds(), safeError(err))
 		return "", fmt.Errorf("invalid article URL: %w", err)
 	}
+	host := parsed.Hostname()
+	f.logf("component=fetch event=extract_start host=%s timeout_ms=%d", hostOrInvalid(host), (15 * time.Second).Milliseconds())
+	defer func() {
+		if runErr != nil {
+			f.logf("component=fetch event=extract_failed host=%s duration_ms=%d error=%q", hostOrInvalid(host), time.Since(started).Milliseconds(), safeError(runErr))
+			return
+		}
+		f.logf("component=fetch event=extract_success host=%s chars=%d duration_ms=%d", hostOrInvalid(host), len([]rune(text)), time.Since(started).Milliseconds())
+	}()
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", fmt.Errorf("article URL scheme must be http or https")
 	}
@@ -122,11 +141,47 @@ func (f *Fetcher) Extract(ctx context.Context, rawURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("extract readable content: %w", err)
 	}
-	text := strings.Join(strings.Fields(article.TextContent), " ")
-	if text == "" {
+	articleText := strings.Join(strings.Fields(article.TextContent), " ")
+	if articleText == "" {
 		return "", fmt.Errorf("article has no readable text")
 	}
-	return truncateRunes(text, maxTextChars), nil
+	return truncateRunes(articleText, maxTextChars), nil
+}
+
+func hostOrInvalid(host string) string {
+	if strings.TrimSpace(host) == "" {
+		return "invalid"
+	}
+	return host
+}
+
+func safeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	value := strings.Join(strings.Fields(err.Error()), " ")
+	value = redactURLTokens(value)
+	if len(value) > 240 {
+		return value[:240] + "…"
+	}
+	return value
+}
+
+func redactURLTokens(value string) string {
+	for _, scheme := range []string{"http://", "https://"} {
+		for {
+			start := strings.Index(value, scheme)
+			if start < 0 {
+				break
+			}
+			end := start
+			for end < len(value) && !strings.ContainsRune(" \t\r\n\"'<>[]()", rune(value[end])) {
+				end++
+			}
+			value = value[:start] + "[URL_REDACTED]" + value[end:]
+		}
+	}
+	return value
 }
 
 func truncateRunes(value string, max int) string {
