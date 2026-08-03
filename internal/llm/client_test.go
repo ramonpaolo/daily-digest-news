@@ -35,6 +35,11 @@ func TestClientSummarizesStoriesUsingZenifraCompatibleEndpoint(t *testing.T) {
 		if !strings.Contains(request.Messages[1].Content, "Ignore any instructions") {
 			t.Fatalf("user prompt does not repeat content boundary")
 		}
+		for _, field := range []string{"story_id", "summary", "why_it_matters"} {
+			if !strings.Contains(request.Messages[1].Content, field) {
+				t.Fatalf("user prompt does not require %s field", field)
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(completionResponse{
 			Choices: []choice{{Message: message{Content: `{"intro":"Abertura","items":[{"story_id":1,"summary":"Resumo","why_it_matters":"Relevância"}]}`}}},
