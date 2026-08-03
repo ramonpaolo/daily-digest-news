@@ -28,7 +28,7 @@ func (f *fakeLessonGenerator) GenerateLesson(_ context.Context, request llm.Less
 
 func TestLearningRunnerSendsStartupAndScheduledLessonsIndependently(t *testing.T) {
 	generator := &fakeLessonGenerator{lesson: llm.Lesson{
-		Title: "Título", Topic: "matemática", Kind: "text", Opening: "Abertura", Content: "Conteúdo",
+		Title: "Título", Topic: "matemática", Subject: "Uma ideia matemática", Kind: "text", Opening: "Abertura", Content: "Conteúdo",
 		Takeaways: []string{"um", "dois", "três"},
 	}}
 	mailer := &fakeMailer{}
@@ -74,7 +74,7 @@ func TestLearningRunnerFailureDoesNotMarkSlotSuccessful(t *testing.T) {
 func TestLearningRunnerLogsNoLessonContent(t *testing.T) {
 	var logs strings.Builder
 	generator := &fakeLessonGenerator{lesson: llm.Lesson{
-		Title: "Segredo", Topic: "física", Kind: "text", Opening: "Abertura", Content: "Texto privado",
+		Title: "Segredo", Topic: "física", Subject: "Uma ideia de física", Kind: "text", Opening: "Abertura", Content: "Texto privado",
 		Takeaways: []string{"um", "dois", "três"},
 	}}
 	runner := NewLearningRunner(generator, &fakeMailer{}, openLearningStore(t), []string{"física"})
@@ -94,7 +94,7 @@ func TestLearningRunnerUsesPersistentHistoryAndDeduplicatesAcrossInstances(t *te
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "learning.sqlite3")
 	generator := &fakeLessonGenerator{lesson: llm.Lesson{
-		Title: "Título", Topic: "matemática", Kind: "text", Opening: "Abertura", Content: "Conteúdo",
+		Title: "Título", Topic: "matemática", Subject: "Uma ideia matemática", Kind: "text", Opening: "Abertura", Content: "Conteúdo",
 		Takeaways: []string{"um", "dois", "três"},
 	}}
 	firstStore, err := storage.Open(ctx, path, 365)

@@ -36,11 +36,13 @@ type Config struct {
 
 var defaultLearningTopics = []string{
 	"matemática",
+	"história da matemática",
 	"computação",
 	"Go",
 	"estruturas de dados e algoritmos",
-	"internals de sistemas operacionais",
-	"internals de bancos de dados",
+	"PostgreSQL",
+	"bancos de dados",
+	"sistemas operacionais",
 	"física",
 }
 

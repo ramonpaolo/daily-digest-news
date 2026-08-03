@@ -14,7 +14,7 @@ Ao iniciar ou reiniciar, o processo executa um digest de notícias e uma lição
 4. valida a resposta JSON da LLM;
 5. monta um e-mail HTML e texto e envia por SMTP.
 
-Além disso, uma lição autocontida de 10–15 minutos é enviada às `07:00` e `18:00`. O formato alterna de forma adaptativa entre texto explicativo e pergunta com resposta comentada. Os temas padrão incluem matemática, computação, Go, estruturas de dados e algoritmos, internals de sistemas operacionais, internals de bancos de dados e física.
+Além disso, uma lição autocontida de 10–15 minutos é enviada às `07:00` e `18:00`. O formato alterna de forma adaptativa entre texto explicativo e pergunta com resposta comentada. `LEARNING_TOPICS` define domínios amplos; a LLM escolhe um assunto concreto dentro deles. Os domínios padrão incluem matemática, história da matemática, computação, Go, estruturas de dados e algoritmos, PostgreSQL, bancos de dados, sistemas operacionais e física. O conteúdo prioriza história, biografias, mecanismos internos e explicações conceituais, evitando temas administrativos, gerenciais e operacionais.
 
 As chamadas da Zenifra AI têm timeout de resposta de 5 minutos por tentativa; a coleta HTTP geral mantém timeout menor e separado.
 
@@ -56,7 +56,7 @@ O modo `run-once` envia um e-mail real. Para testar apenas a coleta e a LLM, use
 | `SCHEDULE_TIME` | não | Default `08:00` |
 | `LEARNING_MORNING_TIME` | não | Default `07:00` |
 | `LEARNING_EVENING_TIME` | não | Default `18:00` |
-| `LEARNING_TOPICS` | não | Lista separada por vírgulas; substitui os temas padrão |
+| `LEARNING_TOPICS` | não | Domínios separados por vírgulas; a LLM escolhe assuntos concretos dentro deles |
 | `TIMEZONE` | não | Default `America/Sao_Paulo` |
 | `TOP_STORIES` | não | Limite global do digest; default `10`, máximo `20` |
 | `SQLITE_PATH` | não | Arquivo SQLite; default `/data/daily-digest-news.sqlite3` |
@@ -64,7 +64,7 @@ O modo `run-once` envia um e-mail real. Para testar apenas a coleta e a LLM, use
 
 As fontes são embutidas no código e ficam ativas por padrão. Uma indisponibilidade isolada é registrada e não impede o envio com as demais fontes; o digest falha somente quando nenhuma fonte retorna notícias utilizáveis. Cada item do email identifica sua fonte. Para adicionar outra fonte, implemente `news.Provider`, adicione testes do adaptador e registre-o no entrypoint.
 
-O fluxo de aprendizado é independente do digest de notícias: uma falha em uma lição não bloqueia as notícias. Os temas configurados são persistidos como interesses ativos e a próxima lição prioriza o menos utilizado. As últimas oito lições enviadas orientam a LLM a evitar repetição, sem reenviar os textos completos.
+O fluxo de aprendizado é independente do digest de notícias: uma falha em uma lição não bloqueia as notícias. Os domínios configurados são persistidos como interesses ativos e a próxima lição prioriza o menos utilizado. As últimas oito lições enviadas orientam a LLM a evitar repetição, sem reenviar os textos completos; cada registro preserva o domínio e o assunto concreto produzido.
 
 ## Health check
 

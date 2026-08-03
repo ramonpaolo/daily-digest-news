@@ -135,7 +135,7 @@ func (r *LearningRunner) run(ctx context.Context, slot string, force bool) (runE
 	}
 	recent := make([]llm.PriorLesson, 0, len(history))
 	for _, prior := range history {
-		recent = append(recent, llm.PriorLesson{DateKey: prior.DateKey, Slot: prior.Slot, Topic: prior.Topic, Kind: prior.Kind, Title: prior.Title})
+		recent = append(recent, llm.PriorLesson{DateKey: prior.DateKey, Slot: prior.Slot, Topic: prior.Topic, Subject: prior.Subject, Kind: prior.Kind, Title: prior.Title})
 	}
 	claim, err := r.store.BeginLesson(ctx, dateKey, slot, `{}`, now)
 	if err != nil {

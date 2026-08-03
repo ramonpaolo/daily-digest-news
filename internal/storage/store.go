@@ -30,6 +30,7 @@ type HistoryLesson struct {
 	DateKey string
 	Slot    string
 	Topic   string
+	Subject string
 	Kind    string
 	Title   string
 }
@@ -99,14 +100,15 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		return fmt.Errorf("read sqlite schema version: %w", err)
 	}
-	if version >= 1 {
+	if version >= 2 {
 		return nil
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin sqlite migration: %w", err)
-	}
-	const schema = `
+	if version < 1 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin sqlite migration: %w", err)
+		}
+		const schema = `
 CREATE TABLE interests (
 	id INTEGER PRIMARY KEY,
 	name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -141,16 +143,39 @@ CREATE TABLE learning_lessons (
 CREATE INDEX learning_lessons_history_idx ON learning_lessons(status, sent_at DESC);
 CREATE INDEX learning_lessons_created_idx ON learning_lessons(created_at);
 `
-	if _, err := tx.ExecContext(ctx, schema); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("apply sqlite schema: %w", err)
+		if _, err := tx.ExecContext(ctx, schema); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("apply sqlite schema: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("record sqlite migration: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit sqlite migration: %w", err)
+		}
+		version = 1
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("record sqlite migration: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit sqlite migration: %w", err)
+	if version < 2 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin sqlite subject migration: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE learning_lessons ADD COLUMN subject TEXT`); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("add lesson subject column: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE learning_lessons SET subject = title WHERE subject IS NULL OR trim(subject) = ''`); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("backfill lesson subjects: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("record sqlite subject migration: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit sqlite subject migration: %w", err)
+		}
 	}
 	return nil
 }
@@ -265,7 +290,7 @@ func (s *Store) SaveGenerated(ctx context.Context, id int64, lesson llm.Lesson, 
 		return fmt.Errorf("encode lesson takeaways: %w", err)
 	}
 	timestamp := now.UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `UPDATE learning_lessons SET title = ?, kind = ?, opening = ?, content = ?, answer = ?, takeaways_json = ?, status = 'email_pending', phase = 'smtp', error = NULL, generated_at = ?, updated_at = ? WHERE id = ?`, lesson.Title, lesson.Kind, lesson.Opening, lesson.Content, lesson.Answer, string(takeaways), timestamp, timestamp, id)
+	result, err := s.db.ExecContext(ctx, `UPDATE learning_lessons SET title = ?, subject = ?, kind = ?, opening = ?, content = ?, answer = ?, takeaways_json = ?, status = 'email_pending', phase = 'smtp', error = NULL, generated_at = ?, updated_at = ? WHERE id = ?`, lesson.Title, lesson.Subject, lesson.Kind, lesson.Opening, lesson.Content, lesson.Answer, string(takeaways), timestamp, timestamp, id)
 	if err != nil {
 		return fmt.Errorf("save generated lesson: %w", err)
 	}
@@ -324,7 +349,7 @@ func (s *Store) RecentLessons(ctx context.Context, limit int) ([]HistoryLesson, 
 	if limit < 1 {
 		return []HistoryLesson{}, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT date_key, slot, topic, kind, title FROM learning_lessons WHERE status = 'sent' ORDER BY sent_at DESC, id DESC LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT date_key, slot, topic, subject, kind, title FROM learning_lessons WHERE status = 'sent' ORDER BY sent_at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query recent lessons: %w", err)
 	}
@@ -332,7 +357,7 @@ func (s *Store) RecentLessons(ctx context.Context, limit int) ([]HistoryLesson, 
 	history := make([]HistoryLesson, 0, limit)
 	for rows.Next() {
 		var lesson HistoryLesson
-		if err := rows.Scan(&lesson.DateKey, &lesson.Slot, &lesson.Topic, &lesson.Kind, &lesson.Title); err != nil {
+		if err := rows.Scan(&lesson.DateKey, &lesson.Slot, &lesson.Topic, &lesson.Subject, &lesson.Kind, &lesson.Title); err != nil {
 			return nil, fmt.Errorf("scan recent lesson: %w", err)
 		}
 		history = append(history, lesson)

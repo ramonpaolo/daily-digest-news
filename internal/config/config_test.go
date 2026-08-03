@@ -23,7 +23,7 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 	if cfg.LearningMorningTime != "07:00" || cfg.LearningEveningTime != "18:00" {
 		t.Fatalf("learning times = %q/%q, want 07:00/18:00", cfg.LearningMorningTime, cfg.LearningEveningTime)
 	}
-	if len(cfg.LearningTopics) != 7 || cfg.LearningTopics[0] != "matemática" {
+	if len(cfg.LearningTopics) != 9 || cfg.LearningTopics[0] != "matemática" || cfg.LearningTopics[1] != "história da matemática" {
 		t.Fatalf("LearningTopics = %#v, want default topic list", cfg.LearningTopics)
 	}
 	if cfg.Timezone != "America/Sao_Paulo" {

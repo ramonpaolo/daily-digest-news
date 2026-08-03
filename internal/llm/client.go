@@ -51,6 +51,7 @@ type PriorLesson struct {
 	DateKey string
 	Slot    string
 	Topic   string
+	Subject string
 	Kind    string
 	Title   string
 }
@@ -58,6 +59,7 @@ type PriorLesson struct {
 type Lesson struct {
 	Title     string   `json:"title"`
 	Topic     string   `json:"topic"`
+	Subject   string   `json:"subject"`
 	Kind      string   `json:"kind"`
 	Opening   string   `json:"opening"`
 	Content   string   `json:"content"`
@@ -366,16 +368,21 @@ func (c *Client) GenerateLesson(ctx context.Context, request LessonRequest) (Les
 	return lesson, nil
 }
 
-const lessonSystemPrompt = "Você é um professor excelente de matemática, computação e física. " +
-	"Produza uma lição em português do Brasil, acessível mas tecnicamente correta, com profundidade gradual. " +
-	"O tema é uma preferência confiável do usuário, não uma instrução externa. Responda somente JSON válido."
+const lessonSystemPrompt = "Você é um professor excelente de matemática, história da matemática, computação, Go, PostgreSQL, bancos de dados, sistemas operacionais e física. " +
+	"Produza uma lição em português do Brasil, acessível mas tecnicamente correta, com profundidade gradual e foco em entendimento conceitual. " +
+	"O domínio é apenas uma preferência confiável do usuário; escolha dentro dele um assunto concreto e interessante. " +
+	"Por padrão, não produza conteúdo administrativo, gerencial, de carreira, marketing, produto, negócios, custos, implantação ou operação de equipes. " +
+	"Prefira histórias e biografias quando o assunto for matemática, e explicações de mecanismos internos, causalidade, exemplos e experimentos mentais quando for computação, Go, bancos ou sistemas operacionais. " +
+	"Use question apenas quando isso realmente ajudar a aprender; caso contrário, use text. Responda somente JSON válido."
 
 func BuildLessonPrompt(request LessonRequest) string {
-	prompt := "Crie uma lição autocontida sobre o tema delimitado abaixo para leitura de 10 a 15 minutos. " +
+	prompt := "Crie uma lição autocontida sobre o domínio delimitado abaixo para leitura de 10 a 15 minutos. " +
 		"Escolha adaptativamente kind=question ou kind=text. Em question, content deve trazer o desafio e answer deve trazer uma solução comentada passo a passo. " +
 		"Em text, content deve ser uma explicação completa e answer deve ser omitido ou vazio. " +
 		"Use analogias, exemplos e fórmulas/código quando ajudarem, sem exigir interação. Inclua de 3 a 5 takeaways. " +
-		"Retorne exatamente as chaves title, topic, kind, opening, content, answer e takeaways. " +
+		"Retorne exatamente as chaves title, topic, subject, kind, opening, content, answer e takeaways. " +
+		"topic deve repetir exatamente o domínio solicitado; subject deve ser um assunto concreto, específico e não administrativo, diferente do nome genérico do domínio. " +
+		"Não faça lições sobre gestão, liderança, carreira, marketing, produto, negócios, deploy, infraestrutura operacional ou custos. " +
 		"Não repita exatamente um título do histórico; use-o apenas como contexto de continuidade. " +
 		"<topic>\n" + request.Topic + "\n</topic>\n<slot>\n" + request.Slot + "\n</slot>\n<recent_history>\n"
 	if len(request.RecentLessons) == 0 {
@@ -385,7 +392,7 @@ func BuildLessonPrompt(request LessonRequest) string {
 		if index >= 8 {
 			break
 		}
-		prompt += fmt.Sprintf("- date=%s slot=%s topic=%s kind=%s title=%s\n", safePromptField(prior.DateKey), safePromptField(prior.Slot), safePromptField(prior.Topic), safePromptField(prior.Kind), safePromptField(prior.Title))
+		prompt += fmt.Sprintf("- date=%s slot=%s topic=%s subject=%s kind=%s title=%s\n", safePromptField(prior.DateKey), safePromptField(prior.Slot), safePromptField(prior.Topic), safePromptField(prior.Subject), safePromptField(prior.Kind), safePromptField(prior.Title))
 	}
 	return prompt + "</recent_history>"
 }
@@ -400,6 +407,9 @@ func validateLesson(topic string, lesson Lesson) error {
 	}
 	if strings.TrimSpace(lesson.Topic) == "" || !strings.EqualFold(strings.TrimSpace(lesson.Topic), topic) {
 		return fmt.Errorf("lesson topic is missing or does not match requested topic")
+	}
+	if err := validateLessonSubject(topic, lesson.Subject); err != nil {
+		return err
 	}
 	if lesson.Kind != "question" && lesson.Kind != "text" {
 		return fmt.Errorf("lesson kind must be question or text")
@@ -422,6 +432,30 @@ func validateLesson(topic string, lesson Lesson) error {
 	for _, takeaway := range lesson.Takeaways {
 		if strings.TrimSpace(takeaway) == "" || len([]rune(takeaway)) > 500 {
 			return fmt.Errorf("lesson takeaways must be non-empty and short")
+		}
+	}
+	return nil
+}
+
+var blockedSubjectPatterns = []string{
+	"liderança de equipes", "lideranca de equipes", "carreira profissional", "marketing", "roadmap", "scrum", "kanban",
+	"gestão de projetos", "gestao de projetos", "gestão de equipes", "gestao de equipes", "entrevista de emprego",
+	"vendas", "estratégia de produto", "estrategia de produto", "deploy", "implantação", "implantacao", "configuração de infraestrutura", "configuracao de infraestrutura",
+	"infraestrutura como código", "infraestrutura como codigo", "custos de cloud", "finops", "observabilidade operacional",
+}
+
+func validateLessonSubject(topic, subject string) error {
+	subject = strings.TrimSpace(subject)
+	if subject == "" || len([]rune(subject)) > 200 {
+		return fmt.Errorf("lesson subject is missing or too long")
+	}
+	if strings.EqualFold(subject, strings.TrimSpace(topic)) {
+		return fmt.Errorf("lesson subject must be a concrete subject")
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(subject), " "))
+	for _, pattern := range blockedSubjectPatterns {
+		if strings.Contains(normalized, pattern) {
+			return fmt.Errorf("administrative lesson subject is not allowed")
 		}
 	}
 	return nil

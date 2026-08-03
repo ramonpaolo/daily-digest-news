@@ -16,6 +16,7 @@ type lessonView struct {
 	Slot      string
 	Title     string
 	Topic     string
+	Subject   string
 	Kind      string
 	Opening   string
 	Content   string
@@ -24,8 +25,9 @@ type lessonView struct {
 }
 
 const lessonTextTemplate = `Lição de aprendizado — {{.Date}}
-Tema: {{.Topic}}
+Domínio: {{.Topic}}
 
+{{.Subject}}
 {{.Title}}
 
 {{.Opening}}
@@ -42,8 +44,10 @@ Pontos-chave:
 const lessonHTMLTemplate = `<!doctype html>
 <html lang="pt-BR"><body style="font-family:Arial,sans-serif;line-height:1.6;color:#202124;max-width:760px;margin:auto">
 <h1>Lição de aprendizado — {{.Date}}</h1>
-<p><strong>Tema:</strong> {{.Topic}}</p>
-<h2>{{.Title}}</h2>
+<p><strong>Domínio:</strong> {{.Topic}}</p>
+<h2>{{.Subject}}</h2>
+<p><strong>Formato:</strong> {{.Kind}}</p>
+<h3>{{.Title}}</h3>
 <p>{{.Opening}}</p>
 <p style="white-space:pre-line">{{.Content}}</p>
 {{if .Answer}}<h3>Resposta comentada</h3><p style="white-space:pre-line">{{.Answer}}</p>{{end}}
@@ -51,8 +55,8 @@ const lessonHTMLTemplate = `<!doctype html>
 </body></html>`
 
 func RenderLesson(lesson llm.Lesson, date time.Time, slot string) (Message, error) {
-	if strings.TrimSpace(lesson.Title) == "" || strings.TrimSpace(lesson.Topic) == "" || strings.TrimSpace(lesson.Opening) == "" || strings.TrimSpace(lesson.Content) == "" {
-		return Message{}, fmt.Errorf("lesson title, topic, opening and content are required")
+	if strings.TrimSpace(lesson.Title) == "" || strings.TrimSpace(lesson.Topic) == "" || strings.TrimSpace(lesson.Subject) == "" || strings.TrimSpace(lesson.Opening) == "" || strings.TrimSpace(lesson.Content) == "" {
+		return Message{}, fmt.Errorf("lesson title, topic, subject, opening and content are required")
 	}
 	if lesson.Kind != "question" && lesson.Kind != "text" {
 		return Message{}, fmt.Errorf("lesson kind must be question or text")
@@ -65,7 +69,7 @@ func RenderLesson(lesson llm.Lesson, date time.Time, slot string) (Message, erro
 	}
 	view := lessonView{
 		Date: date.Format("02/01/2006"), Slot: strings.TrimSpace(slot), Title: lesson.Title,
-		Topic: lesson.Topic, Kind: lesson.Kind, Opening: lesson.Opening, Content: lesson.Content,
+		Topic: lesson.Topic, Subject: lesson.Subject, Kind: lesson.Kind, Opening: lesson.Opening, Content: lesson.Content,
 		Answer: lesson.Answer, Takeaways: lesson.Takeaways,
 	}
 	textTpl, err := texttemplate.New("lesson").Parse(lessonTextTemplate)
@@ -85,7 +89,7 @@ func RenderLesson(lesson llm.Lesson, date time.Time, slot string) (Message, erro
 		return Message{}, fmt.Errorf("render lesson HTML: %w", err)
 	}
 	return Message{
-		Subject:  "Lição de aprendizado — " + lesson.Topic + " — " + view.Date,
+		Subject:  "Lição de aprendizado — " + lesson.Subject + " — " + lesson.Topic + " — " + view.Date,
 		TextBody: strings.TrimSpace(textBody.String()),
 		HTMLBody: htmlBody.String(),
 	}, nil
