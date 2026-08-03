@@ -26,6 +26,9 @@ func TestClientSummarizesStoriesUsingZenifraCompatibleEndpoint(t *testing.T) {
 		if request.Model != "test-model" || len(request.Messages) != 2 {
 			t.Fatalf("request = %+v, want model and system/user messages", request)
 		}
+		if request.MaxTokens != 12000 {
+			t.Fatalf("request max_tokens = %d, want 12000", request.MaxTokens)
+		}
 		if !strings.Contains(request.Messages[0].Content, "untrusted") {
 			t.Fatalf("system prompt does not establish untrusted data boundary")
 		}
