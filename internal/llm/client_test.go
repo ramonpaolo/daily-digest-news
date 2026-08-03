@@ -123,6 +123,30 @@ func TestClientAcceptsNumericStoryIDEncodedAsString(t *testing.T) {
 	}
 }
 
+func TestDecodeStoryIDAcceptsIntegralRepresentations(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{name: "integer", raw: `49154332`, want: 49154332},
+		{name: "numeric string", raw: `"49154332"`, want: 49154332},
+		{name: "decimal string", raw: `"49154332.0"`, want: 49154332},
+		{name: "scientific number", raw: `4.9154332e7`, want: 49154332},
+		{name: "labelled string", raw: `"Hacker News ID: 49154332"`, want: 49154332},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := decodeStoryID(json.RawMessage(test.raw))
+			if err != nil {
+				t.Fatalf("decodeStoryID(%s) error = %v", test.raw, err)
+			}
+			if got != test.want {
+				t.Fatalf("decodeStoryID(%s) = %d, want %d", test.raw, got, test.want)
+			}
+		})
+	}
+}
+
 func TestClientNormalizesStoriesFieldToDigestItems(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -139,5 +163,24 @@ func TestClientNormalizesStoriesFieldToDigestItems(t *testing.T) {
 	}
 	if len(digest.Items) != 1 || digest.Items[0].StoryID != 1 {
 		t.Fatalf("digest = %+v, want one normalized item", digest)
+	}
+}
+
+func TestClientAcceptsStoryIDAlias(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(completionResponse{
+			Choices: []choice{{Message: message{Content: `{"intro":"Abertura","items":[{"id":"Hacker News ID: 1","summary":"Resumo","why_it_matters":"Relevância"}]}`}}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "test-key", "test-model")
+	digest, err := client.Summarize(context.Background(), []Input{{ID: 1, Title: "Title"}})
+	if err != nil {
+		t.Fatalf("Summarize() error = %v, want id alias accepted", err)
+	}
+	if len(digest.Items) != 1 || digest.Items[0].StoryID != 1 {
+		t.Fatalf("digest = %+v, want one item with story_id 1", digest)
 	}
 }

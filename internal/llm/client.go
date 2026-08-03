@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,14 +44,20 @@ type Item struct {
 	WhyItMatters string `json:"why_it_matters"`
 }
 
+var storyIDLabelPattern = regexp.MustCompile(`^\D*(\d+)(?:\.0+)?\D*$`)
+
 func (i *Item) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		StoryID      json.RawMessage `json:"story_id"`
+		ID           json.RawMessage `json:"id"`
 		Summary      string          `json:"summary"`
 		WhyItMatters string          `json:"why_it_matters"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+	if len(raw.StoryID) == 0 {
+		raw.StoryID = raw.ID
 	}
 	storyID, err := decodeStoryID(raw.StoryID)
 	if err != nil {
@@ -62,17 +70,41 @@ func (i *Item) UnmarshalJSON(data []byte) error {
 }
 
 func decodeStoryID(raw json.RawMessage) (int, error) {
-	var numeric int
-	if err := json.Unmarshal(raw, &numeric); err == nil {
-		return numeric, nil
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return 0, fmt.Errorf("story_id must be an integer")
 	}
+
 	var encoded string
 	if err := json.Unmarshal(raw, &encoded); err == nil {
-		if numeric, err := strconv.Atoi(strings.TrimSpace(encoded)); err == nil {
+		if numeric, ok := parseStoryIDText(encoded); ok {
 			return numeric, nil
 		}
+	} else if numeric, ok := parseStoryIDText(trimmed); ok {
+		return numeric, nil
 	}
 	return 0, fmt.Errorf("story_id must be an integer")
+}
+
+func parseStoryIDText(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "-") {
+		return 0, false
+	}
+	if numeric, err := strconv.Atoi(value); err == nil && numeric >= 0 {
+		return numeric, true
+	}
+	if numeric, err := strconv.ParseFloat(value, 64); err == nil && !math.IsNaN(numeric) && !math.IsInf(numeric, 0) && numeric >= 0 && math.Trunc(numeric) == numeric && numeric <= float64(^uint(0)>>1) {
+		return int(numeric), true
+	}
+	match := storyIDLabelPattern.FindStringSubmatch(value)
+	if len(match) == 2 {
+		numeric, err := strconv.Atoi(match[1])
+		if err == nil && numeric >= 0 {
+			return numeric, true
+		}
+	}
+	return 0, false
 }
 
 type Digest struct {
