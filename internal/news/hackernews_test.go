@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"testing"
 )
 
@@ -37,14 +36,16 @@ func TestClientReturnsRankedStoriesAndSkipsDeadItems(t *testing.T) {
 	if len(stories) != 2 {
 		t.Fatalf("len(stories) = %d, want 2", len(stories))
 	}
-	if stories[0].ID != 1 || stories[1].ID != 3 {
-		t.Fatalf("story IDs = %v, want [1 3]", []int{stories[0].ID, stories[1].ID})
+	if stories[0].ID != "hacker_news:1" || stories[1].ID != "hacker_news:3" {
+		t.Fatalf("story IDs = %v, want [hacker_news:1 hacker_news:3]", []string{stories[0].ID, stories[1].ID})
 	}
-	if stories[0].Score != 101 || stories[0].Descendants != 9 {
+	if stories[0].Score == nil || *stories[0].Score != 101 || stories[0].Comments == nil || *stories[0].Comments != 9 {
 		t.Fatalf("metadata not preserved: %+v", stories[0])
 	}
 	if stories[1].Text != "A question" {
 		t.Fatalf("text = %q, want Ask HN text", stories[1].Text)
 	}
-	_ = strconv.Itoa(stories[0].ID)
+	if stories[0].Permalink != "https://news.ycombinator.com/item?id=1" {
+		t.Fatalf("permalink = %q", stories[0].Permalink)
+	}
 }

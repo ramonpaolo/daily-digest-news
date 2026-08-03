@@ -28,3 +28,13 @@ func TestBuildMessageRejectsInvalidRecipient(t *testing.T) {
 		t.Fatalf("buildMessage() error = %v, want recipient validation", err)
 	}
 }
+
+func TestAddressDomainRedactsLocalPart(t *testing.T) {
+	got := addressDomain("Jane Doe <jane.doe@example.test>")
+	if got != "example.test" {
+		t.Fatalf("addressDomain() = %q, want example.test", got)
+	}
+	if strings.Contains(got, "jane.doe") {
+		t.Fatalf("addressDomain() leaked local part: %q", got)
+	}
+}

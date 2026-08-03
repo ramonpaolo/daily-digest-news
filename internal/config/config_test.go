@@ -7,6 +7,7 @@ import (
 
 func TestLoadUsesSafeDefaults(t *testing.T) {
 	setRequired(t)
+	t.Setenv("SMTP_PASSWORD", " abcd efgh ")
 
 	cfg, err := Load()
 	if err != nil {
@@ -24,6 +25,9 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 	}
 	if cfg.TopStories != 10 {
 		t.Fatalf("TopStories = %d, want 10", cfg.TopStories)
+	}
+	if cfg.SMTPPassword != "abcdefgh" {
+		t.Fatalf("SMTPPassword = %q, want compacted secret", cfg.SMTPPassword)
 	}
 	if cfg.AIBaseURL != "https://ai.zenifra.com/v1" {
 		t.Fatalf("AIBaseURL = %q, want Zenifra default", cfg.AIBaseURL)

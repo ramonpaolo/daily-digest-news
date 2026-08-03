@@ -20,11 +20,11 @@ type Message struct {
 }
 
 type itemView struct {
-	ID           int
+	ID           string
+	SourceName   string
 	Title        string
 	Link         string
-	Score        int
-	Comments     int
+	Metrics      string
 	Summary      string
 	WhyItMatters string
 }
@@ -40,10 +40,11 @@ const textTemplate = `Daily Digest News — {{.Date}}
 {{.Intro}}
 
 {{range $index, $item := .Items}}{{$number := add $index 1}}{{$number}}. {{$item.Title}}
+Fonte: {{$item.SourceName}}
 {{$item.Summary}}
 
 Por que importa: {{$item.WhyItMatters}}
-Score: {{$item.Score}} | Comentários: {{$item.Comments}}
+{{$item.Metrics}}
 Link: {{$item.Link}}
 
 {{end}}`
@@ -55,18 +56,19 @@ const htmlTemplate = `<!doctype html>
 {{range $index, $item := .Items}}
 <article style="margin:2em 0;border-top:1px solid #ddd;padding-top:1em">
   <h2>{{$index | addOne}}. <a href="{{$item.Link}}">{{$item.Title}}</a></h2>
+  <p style="color:#666;font-size:.9em">Fonte: {{$item.SourceName}}</p>
   <p>{{$item.Summary}}</p>
   <p><strong>Por que importa:</strong> {{$item.WhyItMatters}}</p>
-  <p style="color:#666;font-size:.9em">Score: {{$item.Score}} | Comentários: {{$item.Comments}} · <a href="{{$item.Link}}">Abrir artigo</a></p>
+  <p style="color:#666;font-size:.9em">{{$item.Metrics}} · <a href="{{$item.Link}}">Abrir artigo</a></p>
 </article>
 {{end}}
 </body></html>`
 
 func Render(stories []news.Story, digest llm.Digest, date time.Time) (Message, error) {
-	byID := make(map[int]llm.Item, len(digest.Items))
+	byID := make(map[string]llm.Item, len(digest.Items))
 	for _, item := range digest.Items {
 		if _, exists := byID[item.StoryID]; exists {
-			return Message{}, fmt.Errorf("duplicate story_id %d", item.StoryID)
+			return Message{}, fmt.Errorf("duplicate story_id %s", item.StoryID)
 		}
 		byID[item.StoryID] = item
 	}
@@ -74,14 +76,18 @@ func Render(stories []news.Story, digest llm.Digest, date time.Time) (Message, e
 	for _, story := range stories {
 		item, ok := byID[story.ID]
 		if !ok {
-			return Message{}, fmt.Errorf("missing digest story_id %d", story.ID)
+			return Message{}, fmt.Errorf("missing digest story_id %s", story.ID)
+		}
+		link := safeLink(story.URL, story.Permalink)
+		if link == "" {
+			return Message{}, fmt.Errorf("story %s has no safe link", story.ID)
 		}
 		view.Items = append(view.Items, itemView{
 			ID:           story.ID,
+			SourceName:   story.SourceName,
 			Title:        story.Title,
-			Link:         safeLink(story.URL, story.ID),
-			Score:        story.Score,
-			Comments:     story.Descendants,
+			Link:         link,
+			Metrics:      formatMetrics(story.Score, story.Comments),
 			Summary:      item.Summary,
 			WhyItMatters: item.WhyItMatters,
 		})
@@ -110,10 +116,23 @@ func Render(stories []news.Story, digest llm.Digest, date time.Time) (Message, e
 	}, nil
 }
 
-func safeLink(raw string, storyID int) string {
-	parsed, err := url.Parse(raw)
-	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != "" && parsed.User == nil {
-		return parsed.String()
+func safeLink(raw, fallback string) string {
+	for _, candidate := range []string{raw, fallback} {
+		parsed, err := url.Parse(candidate)
+		if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != "" && parsed.User == nil {
+			return parsed.String()
+		}
 	}
-	return fmt.Sprintf("https://news.ycombinator.com/item?id=%d", storyID)
+	return ""
+}
+
+func formatMetrics(score, comments *int) string {
+	parts := make([]string, 0, 2)
+	if score != nil {
+		parts = append(parts, fmt.Sprintf("Score: %d", *score))
+	}
+	if comments != nil {
+		parts = append(parts, fmt.Sprintf("Comentários: %d", *comments))
+	}
+	return strings.Join(parts, " | ")
 }

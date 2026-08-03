@@ -39,10 +39,10 @@ func Load() (Config, error) {
 		AIModel:      os.Getenv("ZENIFRA_AI_MODEL"),
 		SMTPHost:     os.Getenv("SMTP_HOST"),
 		SMTPSecurity: valueOr("SMTP_SECURITY", "starttls"),
-		SMTPUsername: os.Getenv("SMTP_USERNAME"),
-		SMTPPassword: os.Getenv("SMTP_PASSWORD"),
-		SMTPFrom:     os.Getenv("SMTP_FROM"),
-		EmailTo:      os.Getenv("EMAIL_TO"),
+		SMTPUsername: strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
+		SMTPPassword: compactSecret(os.Getenv("SMTP_PASSWORD")),
+		SMTPFrom:     strings.TrimSpace(os.Getenv("SMTP_FROM")),
+		EmailTo:      strings.TrimSpace(os.Getenv("EMAIL_TO")),
 	}
 
 	for _, name := range []string{
@@ -99,4 +99,8 @@ func valueOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func compactSecret(value string) string {
+	return strings.Join(strings.Fields(value), "")
 }
