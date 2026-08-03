@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,6 +39,39 @@ type Item struct {
 	StoryID      int    `json:"story_id"`
 	Summary      string `json:"summary"`
 	WhyItMatters string `json:"why_it_matters"`
+}
+
+func (i *Item) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		StoryID      json.RawMessage `json:"story_id"`
+		Summary      string          `json:"summary"`
+		WhyItMatters string          `json:"why_it_matters"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	storyID, err := decodeStoryID(raw.StoryID)
+	if err != nil {
+		return err
+	}
+	i.StoryID = storyID
+	i.Summary = raw.Summary
+	i.WhyItMatters = raw.WhyItMatters
+	return nil
+}
+
+func decodeStoryID(raw json.RawMessage) (int, error) {
+	var numeric int
+	if err := json.Unmarshal(raw, &numeric); err == nil {
+		return numeric, nil
+	}
+	var encoded string
+	if err := json.Unmarshal(raw, &encoded); err == nil {
+		if numeric, err := strconv.Atoi(strings.TrimSpace(encoded)); err == nil {
+			return numeric, nil
+		}
+	}
+	return 0, fmt.Errorf("story_id must be an integer")
 }
 
 type Digest struct {

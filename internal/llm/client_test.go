@@ -103,3 +103,22 @@ func TestClientLogsResponseMetadataWhenCompletionHasNoContent(t *testing.T) {
 		}
 	}
 }
+
+func TestClientAcceptsNumericStoryIDEncodedAsString(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(completionResponse{
+			Choices: []choice{{Message: message{Content: `{"intro":"Abertura","items":[{"story_id":"1","summary":"Resumo","why_it_matters":"Relevância"}]}`}}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "test-key", "test-model")
+	digest, err := client.Summarize(context.Background(), []Input{{ID: 1, Title: "Title"}})
+	if err != nil {
+		t.Fatalf("Summarize() error = %v, want numeric string story_id accepted", err)
+	}
+	if len(digest.Items) != 1 || digest.Items[0].StoryID != 1 {
+		t.Fatalf("digest = %+v, want story_id 1", digest)
+	}
+}
