@@ -6,7 +6,7 @@ O projeto é público para estudo. A aplicação publicada na Zenifra deve perma
 
 ## Como funciona
 
-Todos os dias, às 08:00 no fuso `America/Sao_Paulo`, o processo:
+Ao iniciar ou reiniciar, o processo executa um digest imediatamente. Depois, continua executando todos os dias às 08:00 no fuso `America/Sao_Paulo`:
 
 1. consulta a API oficial do Hacker News;
 2. seleciona dez histórias e tenta extrair o texto dos artigos;
@@ -14,7 +14,7 @@ Todos os dias, às 08:00 no fuso `America/Sao_Paulo`, o processo:
 4. valida a resposta JSON da LLM;
 5. monta um e-mail HTML e texto e envia por SMTP.
 
-O estado é mantido somente em memória. Um reinício pode perder a edição do dia, mas uma execução bem-sucedida não é repetida enquanto o mesmo processo permanecer ativo.
+O estado é mantido somente em memória. Um reinício dispara deliberadamente uma nova execução e pode enviar outro e-mail no mesmo dia; enquanto o mesmo processo permanece ativo, o agendamento diário evita duplicatas.
 
 ## Desenvolvimento local
 

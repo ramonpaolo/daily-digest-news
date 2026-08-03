@@ -79,7 +79,11 @@ func serve(cfg config.Config, runner *job.Runner) error {
 			serverErrors <- err
 		}
 	}()
-	go scheduler.New(runner, cfg.Location, hour, minute).Run(ctx)
+	startupDone := startStartupDigest(ctx, runner)
+	go func() {
+		<-startupDone
+		_ = scheduler.New(runner, cfg.Location, hour, minute).Run(ctx)
+	}()
 
 	select {
 	case err := <-serverErrors:
@@ -89,6 +93,23 @@ func serve(cfg config.Config, runner *job.Runner) error {
 		defer cancel()
 		return server.Shutdown(shutdownCtx)
 	}
+}
+
+type startupRunner interface {
+	RunOnce(context.Context) error
+}
+
+func startStartupDigest(ctx context.Context, runner startupRunner) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := runner.RunOnce(ctx); err != nil {
+			log.Printf("startup digest execution failed: %v", err)
+			return
+		}
+		log.Printf("startup digest execution completed")
+	}()
+	return done
 }
 
 func parseSchedule(value string) (int, int, error) {
