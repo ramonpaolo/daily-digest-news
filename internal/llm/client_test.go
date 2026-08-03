@@ -122,3 +122,22 @@ func TestClientAcceptsNumericStoryIDEncodedAsString(t *testing.T) {
 		t.Fatalf("digest = %+v, want story_id 1", digest)
 	}
 }
+
+func TestClientNormalizesStoriesFieldToDigestItems(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(completionResponse{
+			Choices: []choice{{Message: message{Content: `{"intro":"Abertura","stories":[{"story_id":"1","summary":"Resumo","why_it_matters":"Relevância"}]}`}}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, "test-key", "test-model")
+	digest, err := client.Summarize(context.Background(), []Input{{ID: 1, Title: "Title"}})
+	if err != nil {
+		t.Fatalf("Summarize() error = %v, want stories field normalized", err)
+	}
+	if len(digest.Items) != 1 || digest.Items[0].StoryID != 1 {
+		t.Fatalf("digest = %+v, want one normalized item", digest)
+	}
+}

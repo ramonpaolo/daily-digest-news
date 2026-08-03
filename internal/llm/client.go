@@ -209,6 +209,10 @@ func (c *Client) Summarize(ctx context.Context, inputs []Input) (Digest, error) 
 	var digest Digest
 	content := stripCodeFence(completion.Choices[0].Message.Content)
 	c.logDigestShape(content)
+	if normalized := normalizeDigestContent(content); normalized != content {
+		c.logf("component=llm event=digest_shape_normalized source=stories target=items")
+		content = normalized
+	}
 	if err := json.Unmarshal([]byte(content), &digest); err != nil {
 		c.logf("component=llm event=digest_decode_failed content_bytes=%d error=%q", contentBytes, c.safeError(err))
 		return Digest{}, fmt.Errorf("decode digest JSON: %w", err)
@@ -219,6 +223,33 @@ func (c *Client) Summarize(ctx context.Context, inputs []Input) (Digest, error) 
 	}
 	c.logf("component=llm event=digest_success items=%d duration_ms=%d", len(digest.Items), time.Since(requestStarted).Milliseconds())
 	return digest, nil
+}
+
+func normalizeDigestContent(content string) string {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(content), &fields); err != nil {
+		return content
+	}
+	stories, hasStories := fields["stories"]
+	items, hasItems := fields["items"]
+	if !hasStories || (hasItems && !emptyJSONArray(items)) {
+		return content
+	}
+	var normalized []json.RawMessage
+	if err := json.Unmarshal(stories, &normalized); err != nil {
+		return content
+	}
+	fields["items"] = stories
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return content
+	}
+	return string(encoded)
+}
+
+func emptyJSONArray(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("[]"))
 }
 
 func (c *Client) logDigestShape(content string) {
