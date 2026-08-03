@@ -1,0 +1,90 @@
+name: Test, build and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  IMAGE_TAG: sha-${{ github.sha }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+      - name: Check for credentials
+        uses: gitleaks/gitleaks-action@v2
+
+      - name: Build binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o daily-digest-news ./cmd/daily-digest-news
+
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: docker build --tag "$IMAGE:$IMAGE_TAG" .
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      - name: Push immutable image
+        run: docker push "$IMAGE:$IMAGE_TAG"
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-latest
+    env:
+      ZENIFRA_API_KEY: ${{ secrets.ZENIFRA_DEPLOY_API_KEY }}
+      ZENIFRA_PROJECT_ID: ${{ vars.ZENIFRA_PROJECT_ID }}
+    steps:
+      - name: Promote image in Zenifra when configured
+        run: |
+          if [ -z "$ZENIFRA_API_KEY" ] || [ -z "$ZENIFRA_PROJECT_ID" ]; then
+            echo "Zenifra promotion skipped: configure ZENIFRA_DEPLOY_API_KEY and ZENIFRA_PROJECT_ID."
+            exit 0
+          fi
+          npm install --global @zenifra/cli@0.2.4
+          ZENIFRA_API_KEY="$ZENIFRA_API_KEY" zenifra project image set \
+            --project "$ZENIFRA_PROJECT_ID" \
+            --image "$IMAGE:$IMAGE_TAG" \
+            --json
