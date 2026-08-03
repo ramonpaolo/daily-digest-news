@@ -14,6 +14,8 @@ Ao iniciar ou reiniciar, o processo executa um digest imediatamente. Depois, con
 4. valida a resposta JSON da LLM;
 5. monta um e-mail HTML e texto e envia por SMTP.
 
+As chamadas da Zenifra AI têm timeout de resposta de 5 minutos por tentativa; a coleta HTTP geral mantém timeout menor e separado.
+
 O estado é mantido somente em memória. Um reinício dispara deliberadamente uma nova execução e pode enviar outro e-mail no mesmo dia; enquanto o mesmo processo permanece ativo, o agendamento diário evita duplicatas.
 
 ## Desenvolvimento local

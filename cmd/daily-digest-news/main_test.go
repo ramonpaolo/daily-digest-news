@@ -54,3 +54,16 @@ func TestParseSchedule(t *testing.T) {
 		t.Fatal("parseSchedule(invalid) succeeded, want error")
 	}
 }
+
+func TestHTTPClientsUseDedicatedTimeouts(t *testing.T) {
+	generalClient, aiClient := newHTTPClients()
+	if generalClient == aiClient {
+		t.Fatal("general and AI clients share the same instance")
+	}
+	if generalClient.Timeout != 20*time.Second {
+		t.Fatalf("general HTTP timeout = %s, want 20s", generalClient.Timeout)
+	}
+	if aiClient.Timeout != 5*time.Minute {
+		t.Fatalf("AI HTTP timeout = %s, want 5m", aiClient.Timeout)
+	}
+}

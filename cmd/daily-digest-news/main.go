@@ -21,7 +21,11 @@ import (
 	"github.com/ramonpaolo/daily-digest-news/internal/scheduler"
 )
 
-const hackerNewsAPI = "https://hacker-news.firebaseio.com"
+const (
+	hackerNewsAPI      = "https://hacker-news.firebaseio.com"
+	generalHTTPTimeout = 20 * time.Second
+	aiHTTPTimeout      = 5 * time.Minute
+)
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -35,11 +39,11 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	httpClient := &http.Client{Timeout: 20 * time.Second}
+	httpClient, aiHTTPClient := newHTTPClients()
 	runner := job.NewRunner(
 		news.NewClient(httpClient, hackerNewsAPI),
 		fetch.NewFetcher(httpClient, nil),
-		llm.NewClient(httpClient, cfg.AIBaseURL, cfg.AIAPIKey, cfg.AIModel),
+		llm.NewClient(aiHTTPClient, cfg.AIBaseURL, cfg.AIAPIKey, cfg.AIModel),
 		email.NewSMTPMailer(cfg),
 	)
 	runner.SetLimit(cfg.TopStories)
@@ -57,6 +61,10 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q; use serve or run-once", command)
 	}
+}
+
+func newHTTPClients() (*http.Client, *http.Client) {
+	return &http.Client{Timeout: generalHTTPTimeout}, &http.Client{Timeout: aiHTTPTimeout}
 }
 
 func serve(cfg config.Config, runner *job.Runner) error {
